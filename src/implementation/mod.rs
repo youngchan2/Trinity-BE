@@ -3,18 +3,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-mod hopper_wgmma;
-mod nvls;
-
-use hopper_wgmma::HOPPER_WGMMA_BF16;
-use nvls::NVLS_ONE_SHOT_PUSH_NBI;
+mod cuda;
 
 use super::TargetCapability;
 use crate::DType;
-
-static HOPPER_GEMM_IMPLEMENTATIONS: &[&dyn GemmImplementation] = &[&HOPPER_WGMMA_BF16];
-static HOPPER_ALL_GATHER_IMPLEMENTATIONS: &[&dyn AllGatherImplementation] =
-    &[&NVLS_ONE_SHOT_PUSH_NBI];
 
 /// Enumerates concrete GEMM instances for an already resolved tensor presentation.
 pub trait GemmImplementation: ImplementationDefinition {
@@ -46,7 +38,7 @@ pub fn gemm_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn GemmImplementation] {
     match target {
-        TargetCapability::Hopper => HOPPER_GEMM_IMPLEMENTATIONS,
+        TargetCapability::Hopper => cuda::HOPPER_GEMM_IMPLEMENTATIONS,
     }
 }
 
@@ -55,7 +47,7 @@ pub fn all_gather_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn AllGatherImplementation] {
     match target {
-        TargetCapability::Hopper => HOPPER_ALL_GATHER_IMPLEMENTATIONS,
+        TargetCapability::Hopper => cuda::HOPPER_ALL_GATHER_IMPLEMENTATIONS,
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{
+use super::super::{
     AllGatherImplementation, AttributeSet, ImplementationDefinition, ImplementationId,
     ImplementationInstance,
 };
