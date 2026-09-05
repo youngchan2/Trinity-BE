@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      - id: fix-byte-order-marker
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt lowering backend
+        entry: cargo fmt -p trinity-lowering -- --check
+        language: system
+        files: ^(Cargo\.toml|.*\.rs|\.?rustfmt\.toml|\.pre-commit-config\.yaml)$
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy lowering backend
+        entry: cargo clippy -p trinity-lowering --all-targets --locked -- -D warnings
+        language: system
+        files: ^(Cargo\.(toml|lock)|.*\.rs|\.pre-commit-config\.yaml)$
+        pass_filenames: false

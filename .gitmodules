@@ -1,0 +1,4 @@
+# CUTLASS v4.5.1; gitlink pinned to 2e602843e75100d0e03934efb386b3e1e35d7907.
+[submodule "third_party/cutlass"]
+	path = third_party/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

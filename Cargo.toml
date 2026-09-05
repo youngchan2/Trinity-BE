@@ -1,0 +1,9 @@
+[package]
+name = "trinity-lowering"
+version = "0.1.0"
+edition = "2024"
+description = "Concrete CUDA implementation candidates and physical tensor program plans"
+license = "MIT"
+
+[dependencies]
+thiserror = "1.0.31"
