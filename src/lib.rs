@@ -9,6 +9,9 @@ mod dtype;
 mod implementation;
 mod physical;
 
+pub mod analyzer;
+pub mod triton;
+
 pub use config::{LoweringConfig, TargetCapability};
 pub use dtype::DType;
 pub use implementation::{
