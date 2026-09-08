@@ -2,9 +2,13 @@ use crate::*;
 
 #[test]
 fn lowering_config_carries_the_target_capability() {
-    let config = LoweringConfig::new(TargetCapability::Hopper);
+    let config = LoweringConfig::new(TargetCapability::Cuda(CudaTargetCapability::Hopper));
 
-    assert_eq!(config.target(), TargetCapability::Hopper);
+    assert_eq!(
+        config.target(),
+        TargetCapability::Cuda(CudaTargetCapability::Hopper)
+    );
+    assert_eq!(config, LoweringConfig::default());
 }
 
 #[test]
@@ -15,12 +19,9 @@ fn enumerates_wgmma_tiles_and_nvls_chunks() {
         gemm.attributes().iter().collect::<Vec<_>>(),
         vec![("tile_k", 64), ("tile_m", 128), ("tile_n", 128)]
     );
-    let gather = all_gather_implementations(TargetCapability::Hopper)[0].enumerate(
-        DType::Bf16,
-        [&[64, 128], &[64, 256]],
-        1,
-        2,
-    );
+    let gather = all_gather_implementations(TargetCapability::Cuda(CudaTargetCapability::Hopper))
+        [0]
+    .enumerate(DType::Bf16, [&[64, 128], &[64, 256]], 1, 2);
     assert_eq!(gather.len(), 1);
     assert_eq!(gather[0].id().as_str(), "nvls.one_shot_push_nbi");
     assert_eq!(gather[0].attributes().get("chunk_extent"), Some(128));
@@ -28,7 +29,7 @@ fn enumerates_wgmma_tiles_and_nvls_chunks() {
 
 #[test]
 fn unsupported_presentations_have_no_implementation_instances() {
-    let gemm = gemm_implementations(TargetCapability::Hopper)[0];
+    let gemm = gemm_implementations(TargetCapability::Cuda(CudaTargetCapability::Hopper))[0];
     assert!(
         gemm.enumerate([DType::Fp32; 3], [&[128, 64], &[64, 128], &[128, 128]])
             .is_empty()
@@ -42,7 +43,8 @@ fn unsupported_presentations_have_no_implementation_instances() {
             .is_empty()
     );
 
-    let gather = all_gather_implementations(TargetCapability::Hopper)[0];
+    let gather =
+        all_gather_implementations(TargetCapability::Cuda(CudaTargetCapability::Hopper))[0];
     for (dtype, source, destination, axis, world_size) in [
         (DType::Fp32, [64, 128], [64, 256], 1, 2),
         (DType::Bf16, [64, 128], [64, 128], 1, 1),
@@ -61,12 +63,12 @@ fn unsupported_presentations_have_no_implementation_instances() {
 #[test]
 #[should_panic(expected = "matching K extents")]
 fn mismatched_gemm_extents_remain_an_invariant_violation() {
-    gemm_implementations(TargetCapability::Hopper)[0]
+    gemm_implementations(TargetCapability::Cuda(CudaTargetCapability::Hopper))[0]
         .enumerate([DType::Bf16; 3], [&[128, 64], &[128, 128], &[128, 128]]);
 }
 
 fn implementation() -> ImplementationInstance {
-    gemm_implementations(TargetCapability::Hopper)[0]
+    gemm_implementations(TargetCapability::Cuda(CudaTargetCapability::Hopper))[0]
         .enumerate([DType::Bf16; 3], [&[128, 64], &[64, 128], &[128, 128]])
         .pop()
         .unwrap()
@@ -78,7 +80,8 @@ fn manual_plan(
     intermediate_storage: Storage,
     combined_action: bool,
 ) -> Result<PhysicalPlan, PhysicalInvariantError> {
-    let mut branch = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut branch =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let shape = [128, 128];
     let (a, b, intermediate, output) = if reverse_values {
         let output = branch.add_value(DType::Bf16, shape, Storage::External);
@@ -141,7 +144,8 @@ fn hash_covers_storage_and_action_graph() {
 
 #[test]
 fn finalization_rejects_boundary_and_cross_action_storage_errors() {
-    let mut duplicate = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut duplicate =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let input = duplicate.add_value(DType::Bf16, [1], Storage::External);
     duplicate.bind_input("X", input);
     duplicate.bind_input("X", input);
@@ -150,7 +154,8 @@ fn finalization_rejects_boundary_and_cross_action_storage_errors() {
         Err(PhysicalInvariantError::DuplicateInputTensor { .. })
     ));
 
-    let mut crossing = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut crossing =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let a = crossing.add_value(DType::Bf16, [128, 128], Storage::External);
     let b = crossing.add_value(DType::Bf16, [128, 128], Storage::External);
     let shared = crossing.add_value(DType::Bf16, [128, 128], Storage::Shared);
@@ -180,7 +185,8 @@ fn finalization_rejects_boundary_and_cross_action_storage_errors() {
 
 #[test]
 fn finalization_rejects_operation_cycles_and_missing_action_membership() {
-    let mut cyclic = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut cyclic =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let first_value = cyclic.add_value(DType::Bf16, [128, 128], Storage::External);
     let second_value = cyclic.add_value(DType::Bf16, [128, 128], Storage::Global);
     let first = cyclic.add_operation(
@@ -200,7 +206,8 @@ fn finalization_rejects_operation_cycles_and_missing_action_membership() {
         Err(PhysicalInvariantError::OperationCycle)
     ));
 
-    let mut missing = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut missing =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let input = missing.add_value(DType::Bf16, [128, 128], Storage::External);
     let output = missing.add_value(DType::Bf16, [128, 128], Storage::External);
     missing.bind_input("X", input);
@@ -217,7 +224,8 @@ fn finalization_rejects_operation_cycles_and_missing_action_membership() {
 
 #[test]
 fn finalization_rejects_duplicate_physical_operations() {
-    let mut branch = PhysicalPlanBuilder::new(TargetCapability::Hopper, 1);
+    let mut branch =
+        PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let a = branch.add_value(DType::Bf16, [128, 128], Storage::External);
     let b = branch.add_value(DType::Bf16, [128, 128], Storage::External);
     let first_output = branch.add_value(DType::Bf16, [128, 128], Storage::Global);

@@ -1,0 +1,102 @@
+// Call once before stream capture. Sets shared-memory opt-in and reports the
+// supported worker bound. This function does not allocate memory.
+extern "C" int trinity_prepare(unsigned* maximum_workers) {
+  using namespace trinity::generated;
+
+  if (maximum_workers == nullptr) return kInvalidLaunch;
+
+  int device = 0;
+
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return status;
+
+  cudaDeviceProp properties{};
+  status = cudaGetDeviceProperties(&properties, device);
+  if (status != cudaSuccess) return status;
+  if (properties.major != 9 || properties.minor != 0) return kUnsupportedDevice;
+
+  // Admission uses the resident grid size. NVSHMEM can otherwise fall back
+  // to an ordinary launch, which does not provide that residency guarantee.
+  if (!properties.cooperativeLaunch) return kUnsupportedDevice;
+  if (nvshmem_n_pes() != kWorld) return kInvalidLaunch;
+
+  status = cudaFuncSetAttribute(persistent_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
+  if (status != cudaSuccess) return status;
+
+  int blocks = 0;
+
+  status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, persistent_kernel, kThreads, kSharedBytes);
+  if (status != cudaSuccess) return status;
+
+  int collective_limit = 0;
+  int result = nvshmemx_collective_launch_query_gridsize(reinterpret_cast<void const*>(persistent_kernel), dim3(kThreads), nullptr, kSharedBytes, &collective_limit);
+  if (result != 0) return kCollectiveFailed;
+
+  *maximum_workers = static_cast<unsigned>(std::min(blocks * properties.multiProcessorCount, collective_limit));
+  if (*maximum_workers < kMinimumWorkers) return kInvalidLaunch;
+
+  return 0;
+}
+
+extern "C" int trinity_launch(trinity::generated::LaunchParams const* p) {
+  using namespace trinity::generated;
+
+  if (p == nullptr || p->bindings == nullptr || p->binding_count != kBuffers || p->workspace == nullptr
+      || p->workspace_bytes < kWorkspaceBytes || reinterpret_cast<std::uintptr_t>(p->workspace) % kWorkspaceAlignment != 0
+      || p->worker_count < kMinimumWorkers || p->epoch == 0) return kInvalidLaunch;
+
+  Context c{};
+
+  c.workspace = static_cast<unsigned char*>(p->workspace);
+  c.workers = p->worker_count; c.epoch = p->epoch;
+  c.delay_rank = p->delay_rank; c.delay_task = p->delay_task; c.delay_cycles = p->delay_cycles;
+
+{% for buffer in buffers %}
+  if (p->bindings[{{ buffer.value }}] == nullptr || reinterpret_cast<std::uintptr_t>(p->bindings[{{ buffer.value }}]) % {{ buffer.alignment }} != 0) return kInvalidLaunch;
+  c.bindings.values[{{ buffer.value }}] = p->bindings[{{ buffer.value }}];
+{% endfor %}
+
+  auto stream = reinterpret_cast<cudaStream_t>(p->stream);
+
+  c.rank = nvshmem_my_pe();
+  unsigned maximum_workers = 0;
+  int result = trinity_prepare(&maximum_workers);
+  if (result != 0) return result;
+  if (c.workers > maximum_workers) return kInvalidLaunch;
+  for (unsigned peer = 0; peer < kWorld; ++peer) {
+    if (nvshmem_ptr(p->workspace, peer) == nullptr) return kPeerUnavailable;
+{% for buffer in buffers %}{% if buffer.symmetric %}
+    if (nvshmem_ptr(p->bindings[{{ buffer.value }}], peer) == nullptr) return kPeerUnavailable;
+{% endif %}{% endfor %}
+  }
+{% if nvls %}
+{% for buffer in buffers %}{% if buffer.symmetric %}
+  if (nvshmemx_mc_ptr(NVSHMEM_TEAM_WORLD, p->bindings[{{ buffer.value }}]) == nullptr) return kPeerUnavailable;
+{% endif %}{% endfor %}{% endif %}
+  initialize<<<1, kThreads, 0, stream>>>(c);
+  auto status = cudaGetLastError();
+  if (status != cudaSuccess) return status;
+  // Initialization completes on every PE before any worker can observe signals.
+  nvshmemx_barrier_all_on_stream(stream);
+  void* arguments[] = { &c };
+  result = nvshmemx_collective_launch(reinterpret_cast<void const*>(persistent_kernel), dim3(c.workers), dim3(kThreads), arguments, kSharedBytes, stream);
+  if (result != 0) return kCollectiveFailed;
+  // Protect remotely read source lifetimes and buffer reuse by the caller.
+  nvshmemx_barrier_all_on_stream(stream);
+  return 0;
+
+}
+
+// Wait for this invocation and report asynchronous dispatcher/backend errors.
+// Call after launching, outside stream capture. No allocation is performed.
+extern "C" int trinity_status(void const* workspace, void* stream) {
+  using namespace trinity::generated;
+  if (workspace == nullptr) return kInvalidLaunch;
+  auto status = cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
+  if (status != cudaSuccess) return status;
+  Header result{};
+  status = cudaMemcpy(&result, workspace, sizeof(result), cudaMemcpyDeviceToHost);
+  if (status != cudaSuccess) return status;
+  if (result.error != 0) return result.error;
+  return result.complete == kTasksPerRank && result.active == 0 ? 0 : kInvalidLaunch;
+}

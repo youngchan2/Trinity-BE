@@ -1,8 +1,4 @@
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TargetCapability {
-    Hopper,
-}
+use crate::platform::{CudaTargetCapability, TargetCapability};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweringConfig {
@@ -21,6 +17,6 @@ impl LoweringConfig {
 
 impl Default for LoweringConfig {
     fn default() -> Self {
-        Self::new(TargetCapability::Hopper)
+        Self::new(TargetCapability::Cuda(CudaTargetCapability::Hopper))
     }
 }

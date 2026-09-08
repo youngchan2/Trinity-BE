@@ -1,0 +1,7 @@
+{% for launch in launches %}
+__global__ void kernel_{{ launch.operation }}(Bindings bindings) {
+  extern __shared__ __align__(128) unsigned char storage[];
+  auto const& tile = kTiles[{{ launch.begin }} + blockIdx.x];
+  operation_{{ launch.operation }}(bindings, tile, storage, StreamedRuntime{});
+}
+{% endfor %}

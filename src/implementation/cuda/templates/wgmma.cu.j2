@@ -1,0 +1,109 @@
+template<class Runtime>
+__device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& tile_coord, void* memory, Runtime const& runtime) {
+  using namespace cute;
+  using Element = cutlass::bfloat16_t;
+
+  constexpr int M = {{ m }}, N = {{ n }}, K = {{ k }};
+
+  auto shape = make_shape(Int<M>{}, Int<N>{}, Int<K>{});
+  auto tile = make_shape(Int<128>{}, Int<128>{}, Int<64>{});
+  auto coord = make_coord(tile_coord.x, tile_coord.y, _);
+
+{% block input_views %}
+  auto a_ptr = make_gmem_ptr(static_cast<Element const*>(bindings.values[{{ lhs }}]));
+  auto b_ptr = make_gmem_ptr(static_cast<Element const*>(bindings.values[{{ rhs }}]));
+  auto c_ptr = make_gmem_ptr(static_cast<Element*>(bindings.values[{{ output }}]));
+
+  auto a = make_tensor(a_ptr, select<0,2>(shape), make_stride(Int<K>{}, _1{}));
+  auto b = make_tensor(b_ptr, select<1,2>(shape), make_stride(_1{}, Int<N>{}));
+  auto c = make_tensor(c_ptr, select<0,1>(shape), make_stride(Int<N>{}, _1{}));
+
+  auto ga = local_tile(a, tile, coord, Step<_1,X,_1>{});
+  auto gb = local_tile(b, tile, coord, Step<X,_1,_1>{});
+  auto gc = local_tile(c, tile, coord, Step<_1,_1,X>{});
+{% endblock %}
+
+  auto la = tile_to_shape(GMMA::Layout_K_SW128_Atom<Element>{}, make_shape(Int<128>{}, Int<64>{}));
+  auto lb = tile_to_shape(GMMA::Layout_MN_SW128_Atom<Element>{}, make_shape(Int<128>{}, Int<64>{}));
+
+  struct Shared {
+    alignas(128) ArrayEngine<Element, cosize_v<decltype(la)>> a[2];
+    alignas(128) ArrayEngine<Element, cosize_v<decltype(lb)>> b[2];
+  };
+
+  static_assert(sizeof(Shared) == 65536);
+  auto& shared = *static_cast<Shared*>(memory);
+
+  auto ca = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, Element>{},
+                            Layout<Shape<_16,_8>, Stride<_8,_1>>{},
+                            Layout<Shape<_1,_8>>{});
+
+  auto cb = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, Element>{},
+                            Layout<Shape<_16,_8>>{},
+                            Layout<Shape<_8,_1>>{});
+
+  auto tca = ca.get_slice(threadIdx.x);
+  auto tcb = cb.get_slice(threadIdx.x);
+
+  auto tga = tca.partition_S(ga);
+  auto tgb = tcb.partition_S(gb);
+
+  auto mma = make_tiled_mma(SM90_64x64x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::MN>{});
+  auto tmma = mma.get_slice(threadIdx.x);
+  auto tc = tmma.partition_C(gc);
+
+  auto accumulator = tmma.make_fragment_C(tc);
+  clear(accumulator);
+
+{% block input_load %}
+  auto load = [&](int k, int slot) {
+    auto sa = make_tensor(make_smem_ptr(shared.a[slot].begin()), la);
+    auto sb = make_tensor(make_smem_ptr(shared.b[slot].begin()), lb);
+
+    auto tsa = tca.partition_D(as_position_independent_swizzle_tensor(sa));
+    auto tsb = tcb.partition_D(as_position_independent_swizzle_tensor(sb));
+
+    copy(ca, tga(_,_,_,k), tsa);
+    copy(cb, tgb(_,_,_,k), tsb);
+
+    cp_async_fence();
+  };
+{% endblock %}
+
+  if (!runtime.await_stage(0)) return false;
+  load(0, 0);
+
+  for (int k = 0; k < K / 64; ++k) {
+    cp_async_wait<0>();
+    __syncthreads();
+
+    bool prefetch = runtime.prefetch_stage(k + 1, K / 64);
+    if (prefetch) load(k + 1, (k + 1) % 2);
+
+    auto sa = make_tensor(make_smem_ptr(shared.a[k % 2].begin()), la);
+    auto sb = make_tensor(make_smem_ptr(shared.b[k % 2].begin()), lb);
+
+    auto fa = tmma.make_fragment_A(tmma.partition_A(sa));
+    auto fb = tmma.make_fragment_B(tmma.partition_B(sb));
+
+    warpgroup_fence_operand(accumulator);
+    warpgroup_arrive();
+
+    cute::gemm(mma, fa, fb, accumulator);
+
+    warpgroup_commit_batch();
+    warpgroup_wait<0>();
+    warpgroup_fence_operand(accumulator);
+    __syncthreads();
+
+    if (k + 1 < K / 64 && !prefetch) {
+      if (!runtime.await_stage(k + 1)) return false;
+      load(k + 1, (k + 1) % 2);
+    }
+  }
+{% block output_store %}
+  CUTE_UNROLL
+  for (int i = 0; i < size(accumulator); ++i) tc(i) = Element(accumulator(i));
+{% endblock %}
+  return true;
+}

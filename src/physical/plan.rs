@@ -80,6 +80,9 @@ impl<I, T> Default for IdVec<I, T> {
 /// ABI boundary values use [`Storage::External`]. Values passed between distinct
 /// actions must reside in [`Storage::External`] or [`Storage::Global`], while
 /// [`Storage::Shared`] and [`Storage::Register`] are local to one action.
+/// A value retains its rank-local tensor shape after promotion; execution
+/// concretization allocates storage for its live tile/panel, not that entire
+/// shape, and preserves the value's dtype at each operation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Storage {
     /// Storage supplied by the caller through an input or output ABI binding.

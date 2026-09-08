@@ -6,4 +6,6 @@ description = "Concrete CUDA implementation candidates and physical tensor progr
 license = "MIT"
 
 [dependencies]
+minijinja = "2"
+serde = { version = "1", features = ["derive"] }
 thiserror = "1.0.31"

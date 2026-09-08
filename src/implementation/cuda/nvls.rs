@@ -53,6 +53,10 @@ impl NvlsOneShotPushNbi {
 }
 
 impl ImplementationDefinition for NvlsOneShotPushNbi {
+    fn cuda(&self) -> Option<&dyn crate::emit::cuda::CudaImplementation> {
+        Some(self)
+    }
+
     fn id(&self) -> ImplementationId {
         ImplementationId::new("nvls.one_shot_push_nbi")
     }

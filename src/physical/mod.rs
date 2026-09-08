@@ -3,6 +3,9 @@ mod canonical;
 mod error;
 mod finalize;
 mod plan;
+mod rewrite;
+
+pub(crate) use rewrite::rewrite_actions;
 
 pub use builder::PhysicalPlanBuilder;
 pub use error::PhysicalInvariantError;

@@ -1,0 +1,56 @@
+// Call once before capture to validate the target and opt in to shared memory.
+// Streamed kernels do not use a resident Worker pool; the reported bound is 1.
+extern "C" int trinity_prepare(unsigned* maximum_workers) {
+  using namespace trinity::generated;
+
+  if (maximum_workers == nullptr) return kInvalidLaunch;
+
+  int device = 0;
+
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return status;
+
+  cudaDeviceProp properties{};
+  status = cudaGetDeviceProperties(&properties, device);
+  if (status != cudaSuccess) return status;
+  if (properties.major != 9 || properties.minor != 0) return kUnsupportedDevice;
+
+{% for launch in launches %}
+  status = cudaFuncSetAttribute(kernel_{{ launch.operation }}, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
+  if (status != cudaSuccess) return status;
+{% endfor %}
+
+  *maximum_workers = 1;
+  return 0;
+}
+
+extern "C" int trinity_launch(trinity::generated::LaunchParams const* p) {
+  using namespace trinity::generated;
+
+  if (p == nullptr || p->bindings == nullptr || p->binding_count != kBuffers) return kInvalidLaunch;
+
+  Bindings bindings{};
+
+{% for buffer in buffers %}
+  if (p->bindings[{{ buffer.value }}] == nullptr ||
+      reinterpret_cast<std::uintptr_t>(p->bindings[{{ buffer.value }}]) % {{ buffer.alignment }} != 0) return kInvalidLaunch;
+  bindings.values[{{ buffer.value }}] = p->bindings[{{ buffer.value }}];
+{% endfor %}
+
+  auto stream = reinterpret_cast<cudaStream_t>(p->stream);
+
+{% for launch in launches %}
+{% if launch.count > 0 %}
+  kernel_{{ launch.operation }}<<<{{ launch.count }}, kThreads, kSharedBytes, stream>>>(bindings);
+  {
+    auto status = cudaGetLastError();
+    if (status != cudaSuccess) return status;
+  }
+{% endif %}{% endfor %}
+  return 0;
+}
+
+// Completion is stream completion. Call outside stream capture.
+extern "C" int trinity_status(void* stream) {
+  return cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
+}

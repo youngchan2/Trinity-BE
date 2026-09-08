@@ -1,0 +1,49 @@
+{% include "headers" %}
+#include <algorithm>
+#include <cuda/atomic>
+#include <nvshmem.h>
+#include <nvshmemx.h>
+
+namespace trinity::generated {
+inline constexpr unsigned kWorld = {{ world }};
+inline constexpr unsigned kBuffers = {{ buffers|length }};
+inline constexpr unsigned kTasksPerRank = {{ tasks_per_rank }};
+inline constexpr unsigned kThreads = 128, kMinimumWorkers = {{ minimum_workers }};
+inline constexpr std::size_t kSharedBytes = {{ shared }}, kWorkspaceBytes = {{ workspace.bytes }};
+inline constexpr std::size_t kWorkspaceAlignment = {{ workspace.alignment }};
+inline constexpr std::size_t kWorkspaceHeaderBytes = {{ workspace.header_bytes }};
+
+inline constexpr std::size_t kTokens = {{ workspace.tokens }}, kStates = {{ workspace.states }}, kQueue = {{ workspace.queue }};
+
+{{ common_types }}
+{{ types }}
+
+static __device__ constexpr Dependency kDependencies[] = {
+{% for d in dependencies %}  { {{ d.rank }}, {{ d.slot }} },
+{% else %}  { 0, 0 },
+{% endfor %}};
+
+static __device__ constexpr Range kStages[] = {
+{% for s in stages %}  { {{ s.begin }}, {{ s.count }} },
+{% else %}  { 0, 0 },
+{% endfor %}};
+
+static __device__ constexpr Range kOutputDependencies[] = {
+{% for d in outputs %}  { {{ d.begin }}, {{ d.count }} },
+{% endfor %}};
+
+static __device__ constexpr Task kTasks[] = {
+{% for t in tasks %}  { {{ t.operation }}, {{ t.slot }}, {{ t.x }}, {{ t.y }}, {{ t.z }}, { {{ t.dependencies.begin }}, {{ t.dependencies.count }} }, { {{ t.stages.begin }}, {{ t.stages.count }} } },
+{% else %}  {},
+{% endfor %}};
+
+{{ runtime }}
+
+{% for body in bodies %}{{ body }}
+{% endfor %}
+
+{% include "kernels" %}
+
+} // namespace trinity::generated
+
+{% include "host" %}

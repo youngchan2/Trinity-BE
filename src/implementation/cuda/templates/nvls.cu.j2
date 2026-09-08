@@ -1,0 +1,35 @@
+template<class Runtime>
+__device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& tile_coord, void*, Runtime const& runtime) {
+  using Element = __nv_bfloat16;
+
+  constexpr auto algorithm = nvshmemx::tile_coll_algo_t::NVLS_ONE_SHOT_PUSH_NBI;
+
+  constexpr int Rows = {% if axis == 0 %}{{ chunk }}{% else %}{{ source_rows }}{% endif %};
+  constexpr int Cols = {% if axis == 1 %}{{ chunk }}{% else %}{{ source_cols }}{% endif %};
+
+  auto layout = nvshmemx::make_layout(
+      nvshmemx::make_shape(ConstInt<Rows>{}, ConstInt<Cols>{}),
+      nvshmemx::make_stride(ConstInt<{{ source_cols }}>{}, ConstInt<1>{}));
+
+  auto destination_layout = nvshmemx::make_layout(
+      nvshmemx::make_shape(ConstInt<Rows{% if axis == 0 %} * kWorld{% endif %}>{}, ConstInt<Cols{% if axis == 1 %} * kWorld{% endif %}>{}),
+      nvshmemx::make_stride(ConstInt<{{ target_cols }}>{}, ConstInt<1>{}));
+
+  auto* src = static_cast<Element*>(bindings.values[{{ input }}]) + std::size_t(tile_coord.x) * {% if axis == 0 %}{{ source_cols }}{% else %}1{% endif %};
+
+  auto* dst = static_cast<Element*>(bindings.values[{{ output }}])
+      + (std::size_t(tile_coord.x) + std::size_t(runtime.rank()) * ({% if axis == 0 %}{{ source_rows }}{% else %}{{ source_cols }}{% endif %} - {{ chunk }})) * {% if axis == 0 %}{{ target_cols }}{% else %}1{% endif %};
+
+  auto source_tensor = nvshmemx::Tensor(src, layout);
+  auto destination_tensor = nvshmemx::Tensor(dst, destination_layout);
+
+  auto start = nvshmemx::make_shape(0, 0);
+  auto boundary = nvshmemx::make_shape(Rows, Cols);
+
+  int status = nvshmemx::tile_allgather_block<decltype(source_tensor), decltype(destination_tensor), decltype(start), algorithm>(
+      NVSHMEM_TEAM_WORLD, source_tensor, destination_tensor, start, boundary, 0);
+  if (status == 0) status = nvshmemx::tile_collective_wait_block<algorithm>(NVSHMEM_TEAM_WORLD, 0);
+  if (status != 0) runtime.fail(kCollectiveFailed);
+
+  return status == 0;
+}

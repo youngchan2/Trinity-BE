@@ -8,6 +8,13 @@ mod cuda;
 use super::TargetCapability;
 use crate::DType;
 
+/// Returns the target's built-in fusion rules in deterministic order.
+pub fn fusion_rules(target: TargetCapability) -> &'static [&'static dyn crate::FusionRule] {
+    match target {
+        TargetCapability::Cuda(target) => cuda::fusion_rules(target),
+    }
+}
+
 /// Enumerates concrete GEMM instances for an already resolved tensor presentation.
 pub trait GemmImplementation: ImplementationDefinition {
     /// Returns no instances for unsupported dtype, rank, or tile extents.
@@ -38,7 +45,7 @@ pub fn gemm_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn GemmImplementation] {
     match target {
-        TargetCapability::Hopper => cuda::HOPPER_GEMM_IMPLEMENTATIONS,
+        TargetCapability::Cuda(target) => cuda::gemm_implementations(target),
     }
 }
 
@@ -47,7 +54,7 @@ pub fn all_gather_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn AllGatherImplementation] {
     match target {
-        TargetCapability::Hopper => cuda::HOPPER_ALL_GATHER_IMPLEMENTATIONS,
+        TargetCapability::Cuda(target) => cuda::all_gather_implementations(target),
     }
 }
 
@@ -66,6 +73,11 @@ impl ImplementationId {
 
 pub trait ImplementationDefinition: Sync {
     fn id(&self) -> ImplementationId;
+
+    /// Optional CUDA specialization owned by this definition.
+    fn cuda(&self) -> Option<&dyn crate::emit::cuda::CudaImplementation> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

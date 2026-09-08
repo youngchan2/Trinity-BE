@@ -1,11 +1,11 @@
 use trinity_lowering::{
-    CommunicationKind, CommunicationOperation, ComputeOperation, DType, OperationPayload,
-    PhysicalPlan, PhysicalPlanBuilder, Storage, TargetCapability, all_gather_implementations,
-    gemm_implementations,
+    CommunicationKind, CommunicationOperation, ComputeOperation, CudaTargetCapability, DType,
+    OperationPayload, PhysicalPlan, PhysicalPlanBuilder, Storage, TargetCapability,
+    all_gather_implementations, gemm_implementations,
 };
 
 fn gemm_plan(gather_weight: bool) -> PhysicalPlan {
-    let target = TargetCapability::Hopper;
+    let target = TargetCapability::Cuda(CudaTargetCapability::Hopper);
     let world_size = if gather_weight { 2 } else { 1 };
     let mut builder = PhysicalPlanBuilder::new(target, world_size);
     let x = builder.add_value(DType::Bf16, [128, 64], Storage::External);
