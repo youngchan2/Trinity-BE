@@ -278,6 +278,9 @@ fn occupied_credit_does_not_block_a_ready_producer_or_fully_ready_gemm() {
 #[test]
 fn generated_plans_complete_under_varied_dispatch_and_repeated_epochs() {
     let mut plans = vec![
+        support::tensor::normalization(2, 129, 2),
+        support::tensor::silu(2, 129, 2),
+        support::tensor::gather_normalization(2),
         support::gemm(256, 256, 192, 2),
         support::peer_chain("peer_push", "peer_pull", 2),
         support::peer_chain("peer_pull", "peer_push", 2),

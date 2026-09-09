@@ -139,21 +139,31 @@ private:
 
 struct BufferSpec {
   std::size_t value, bytes, alignment;
-  std::int64_t rows, columns, stride0, stride1;
+  std::vector<std::int64_t> shape, strides;
+  std::string dtype;
   bool symmetric;
 };
 
 struct TensorView {
   std::uintptr_t address;
   std::size_t available_bytes;
-  std::int64_t rows, columns, stride0, stride1;
+  std::vector<std::int64_t> shape, strides;
+  std::string dtype;
   int device;
-  bool bf16, cuda, symmetric;
+  bool cuda, symmetric;
 };
 
 inline void validate_tensor(BufferSpec const& s, TensorView const& t, int device) {
-  if (!t.cuda || !t.bf16 || t.device != device || t.rows != s.rows || t.columns != s.columns ||
-      t.stride0 != s.stride0 || t.stride1 != s.stride1 || !t.address || !s.alignment ||
+  auto width = s.dtype == "bf16" ? 2u : s.dtype == "fp32" ? 4u : 0u;
+  std::size_t count=1;
+  bool valid=width && (s.shape.size()==1 || s.shape.size()==2) && s.strides.size()==s.shape.size();
+  for (std::size_t axis=s.shape.size(); valid && axis-->0;) {
+    auto extent=s.shape[axis];
+    valid=extent>0 && s.strides[axis]==static_cast<std::int64_t>(count) && count<=2147483647u/static_cast<std::size_t>(extent);
+    if (valid) count*=extent;
+  }
+  if (!valid || s.bytes!=count*width || s.alignment<width || (s.alignment&(s.alignment-1)) ||
+      !t.cuda || t.dtype!=s.dtype || t.device != device || t.shape != s.shape || t.strides != s.strides || !t.address || !s.alignment ||
       t.address % s.alignment || t.available_bytes < s.bytes || (s.symmetric && !t.symmetric))
     throw std::invalid_argument("Tensor does not match binding " + std::to_string(s.value) +
         " (dtype/shape/stride/alignment/device/storage)");

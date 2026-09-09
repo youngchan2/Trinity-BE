@@ -26,7 +26,7 @@ PYBIND11_MODULE(_native,m) {
   });
 
   py::class_<BufferSpec>(m,"BufferSpec")
-    .def(py::init<std::size_t,std::size_t,std::size_t,std::int64_t,std::int64_t,std::int64_t,std::int64_t,bool>());
+    .def(py::init<std::size_t,std::size_t,std::size_t,std::vector<std::int64_t>,std::vector<std::int64_t>,std::string,bool>());
 
   py::class_<World,std::shared_ptr<World>>(m,"World")
     .def_static("create",&World::create,py::call_guard<py::gil_scoped_release>())

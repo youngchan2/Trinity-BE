@@ -20,12 +20,12 @@ mod tests;
 use serde::Serialize;
 
 use crate::platform::{CudaTargetCapability, TargetCapability};
-use crate::{DType, PhysicalPlan, Storage};
+use crate::{PhysicalPlan, Storage};
 
 pub use backend::{CudaImplementation, OperationEmission, Region, Work};
 pub use error::EmitError;
-pub(crate) use graph::full_region;
 pub use graph::{Dependency, Execution, Stage, Task};
+pub(crate) use graph::{full_region, region_shape};
 pub use requirements::{BufferBindingRequirement, CudaRequirements};
 pub use source::CudaSource;
 
@@ -44,19 +44,15 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
 
     // Collect buffer allocation and binding requirements for the plan's value instances.
     for (id, value) in plan.value_instances() {
-        if value.dtype() != DType::Bf16
-            || matches!(value.storage(), Storage::Shared | Storage::Register)
-        {
+        if matches!(value.storage(), Storage::Shared | Storage::Register) {
             return Err(EmitError::Unsupported(format!(
                 "value {} dtype/storage",
                 id.index()
             )));
         }
 
-        let shape: [usize; 2] = value
-            .shape()
-            .try_into()
-            .map_err(|_| EmitError::Unsupported("non-matrix value".into()))?;
+        let shape = value.shape().to_vec();
+        let extent = region_shape(&shape)?;
 
         // Disallow empty matrices.
         if shape.contains(&0) {
@@ -65,7 +61,7 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
 
         // CuTe's statically specialized global layouts use 32-bit indices.
         // Reject oversized spans before constructing work or generating CUDA.
-        if shape[0] > i32::MAX as usize / shape[1] {
+        if extent[0] > i32::MAX as usize / extent[1] {
             return Err(EmitError::Unsupported(
                 "matrix exceeds 32-bit CuTe indexing".into(),
             ));
@@ -73,10 +69,14 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
 
         buffers.push(BufferBindingRequirement {
             dtype: value.dtype(),
-            strides: [shape[1], 1],
+            strides: if shape.len() == 1 {
+                vec![1]
+            } else {
+                vec![shape[1], 1]
+            },
             value: id.index(),
+            bytes: extent[0] * extent[1] * value.dtype().size_bytes(),
             shape,
-            bytes: shape[0] * shape[1] * 2,
             alignment: 16,
             external: value.storage() == Storage::External,
             symmetric: false,
@@ -100,6 +100,9 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
 
     // Generate each action's CUDA body, per-rank work, and resource requirements.
     for (action_id, action) in plan.actions() {
+        if action.operations().len() != 1 {
+            return Err(EmitError::Unsupported("non-singleton Action".into()));
+        }
         let op_id = action.operations()[0];
         let op = plan.operation(action.operations()[0]).unwrap();
 
@@ -108,7 +111,12 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
             crate::OperationPayload::Communication(op) => op.implementation(),
         };
 
-        let backend = instance.definition().cuda().unwrap();
+        let backend = instance.definition().cuda().ok_or_else(|| {
+            EmitError::Unsupported(format!(
+                "implementation {} has no CUDA backend",
+                instance.id().as_str()
+            ))
+        })?;
         let result = backend.specialize(plan, op_id)?;
 
         bodies.push(result.body.clone());

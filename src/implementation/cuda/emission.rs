@@ -212,6 +212,16 @@ impl CudaImplementation for NvlsOneShotPushNbi {
         };
         let source = plan.value_instance(*input).unwrap().shape();
         let target = plan.value_instance(*output).unwrap().shape();
+
+        if source.len() != 2
+            || target.len() != 2
+            || plan.value_instance(*input).unwrap().dtype() != DType::Bf16
+            || plan.value_instance(*output).unwrap().dtype() != DType::Bf16
+            || comm.implementation().id() != self.id()
+        {
+            return Err(EmitError::Unsupported("NVLS requires BF16 matrices".into()));
+        }
+
         let axis = (0..2)
             .find(|&axis| source[axis] != target[axis])
             .ok_or_else(|| EmitError::Unsupported("NVLS shard axis".into()))?;

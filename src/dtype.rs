@@ -5,6 +5,15 @@ pub enum DType {
     Fp32,
 }
 
+impl DType {
+    pub const fn size_bytes(self) -> usize {
+        match self {
+            Self::Bf16 => 2,
+            Self::Fp32 => 4,
+        }
+    }
+}
+
 impl std::str::FromStr for DType {
     type Err = ();
 

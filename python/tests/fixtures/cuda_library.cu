@@ -9,16 +9,20 @@ using namespace trinity::abi;
 
 static unsigned preparations=0;
 
+#ifndef FIXTURE_COPY_BYTES
+#define FIXTURE_COPY_BYTES 32768
+#endif
+
 static bool fault(char const* mode) {
   auto value=std::getenv("TRINITY_FIXTURE_FAILURE");
   return value && std::strcmp(value,mode)==0;
 }
 
-__global__ void copy_kernel(unsigned short const* input,unsigned short* output) {
+__global__ void copy_kernel(unsigned char const* input,unsigned char* output) {
   // Make pending-GC coverage deterministic without a device-wide synchronization.
   auto start=clock64();
   while(clock64()-start<20000000ULL) __nanosleep(256);
-  for(unsigned i=threadIdx.x;i<128*128;i+=blockDim.x) output[i]=input[i];
+  for(unsigned i=threadIdx.x;i<FIXTURE_COPY_BYTES;i+=blockDim.x) output[i]=input[i];
 }
 
 extern "C" Descriptor const* trinity_abi() {
@@ -34,7 +38,7 @@ extern "C" int trinity_launch(StreamedLaunch const* p,ErrorInfo* error) {
   if(preparations!=1) return report(error,generated,-77,validate);
 
   copy_kernel<<<1,128,0,reinterpret_cast<cudaStream_t>(p->stream)>>>(
-      static_cast<unsigned short const*>(p->bindings[0]),static_cast<unsigned short*>(p->bindings[1]));
+      static_cast<unsigned char const*>(p->bindings[0]),static_cast<unsigned char*>(p->bindings[1]));
   auto code=cudaGetLastError();
   return report(error,runtime,fault("launch")?719:code,launch,true);
 }

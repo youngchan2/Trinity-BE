@@ -10,6 +10,11 @@ loading and execution.
 The CUDA backend targets NVIDIA Hopper (`sm_90a`), with streamed execution for
 single-GPU programs and persistent execution using NVSHMEM for multi-GPU programs.
 
+Contiguous BF16/FP32 vectors and matrices support pointwise arithmetic, ReLU,
+row sums and explicit row broadcasting. See the
+[Python operator guide](python/README.md#pointwise-operations) for enumeration
+and dtype contracts.
+
 ## Getting started
 
 Follow the [Python/PyTorch guide](python/README.md) for prerequisites,

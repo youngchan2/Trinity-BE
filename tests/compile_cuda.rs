@@ -14,6 +14,58 @@ fn check(plan: PhysicalPlan) {
 }
 
 #[test]
+#[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU required"]
+fn tensor_operation_sources_compile_and_link() {
+    use support::tensor;
+    use trinity_lowering::DType;
+    for world in [1, 2] {
+        check(tensor::normalization(16, 4096, world));
+        check(tensor::normalization(2, 129, world));
+        check(tensor::silu(16, 16384, world));
+        check(tensor::pointwise(
+            "add",
+            &[129],
+            &[DType::Bf16, DType::Fp32, DType::Bf16],
+            None,
+            world,
+        ));
+        check(tensor::pointwise(
+            "div",
+            &[129],
+            &[DType::Fp32; 3],
+            None,
+            world,
+        ));
+    }
+    check(tensor::gather_normalization(2));
+}
+
+#[test]
+#[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU required"]
+fn relu_sources_compile_and_link() {
+    use support::tensor;
+    use trinity_lowering::DType;
+    for world in [1, 2] {
+        for input in [DType::Bf16, DType::Fp32] {
+            for output in [DType::Bf16, DType::Fp32] {
+                let shape: &[usize] = if input == DType::Bf16 {
+                    &[129]
+                } else {
+                    &[3, 257]
+                };
+                check(tensor::pointwise(
+                    "relu",
+                    shape,
+                    &[input, output],
+                    None,
+                    world,
+                ));
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires CUDA 13.0+ and CUTLASS 4.5.1; does not require a GPU"]
 fn streamed_sources_compile_and_link() {
     for k in [64, 128, 192, 320] {

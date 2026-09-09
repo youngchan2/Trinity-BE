@@ -1,4 +1,5 @@
 //! Fixtures built exclusively through the public physical-plan API.
+pub mod tensor;
 use trinity_lowering::*;
 
 const TARGET: TargetCapability = TargetCapability::Cuda(CudaTargetCapability::Hopper);

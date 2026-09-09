@@ -13,6 +13,9 @@ CompileError = _compiler.CompileError
 
 gemm_implementations = _compiler.gemm_implementations
 all_gather_implementations = _compiler.all_gather_implementations
+pointwise_implementations = _compiler.pointwise_implementations
+reduce_sum_implementations = _compiler.reduce_sum_implementations
+broadcast_implementations = _compiler.broadcast_implementations
 
 
 class CudaSource:

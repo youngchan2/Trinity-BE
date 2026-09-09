@@ -178,12 +178,7 @@ pub(super) fn build(
 
             producers[rank][binding.value().index()].push(Producer {
                 // Full input region on this rank.
-                region: Region::new(
-                    binding.value(),
-                    rank,
-                    [0, 0],
-                    [value.shape()[0], value.shape()[1]],
-                ),
+                region: Region::new(binding.value(), rank, [0, 0], region_shape(value.shape())?),
                 // Shared input-readiness token, after the task slots.
                 token: Dependency { rank, slot: count },
             });
@@ -209,7 +204,7 @@ pub(super) fn build(
     for rank in &producers {
         for (pieces, (value_id, value)) in rank.iter().zip(plan.value_instances()) {
             let value_id = value_id.index();
-            let shape = value.shape();
+            let shape = region_shape(value.shape())?;
 
             let mut area = 0usize;
 
@@ -369,9 +364,14 @@ fn validate_region(plan: &PhysicalPlan, region: Region) -> Result<(), EmitError>
         .value_instance(region.value)
         .ok_or_else(|| EmitError::Contract("unknown value".into()))?;
 
+    let shape = region_shape(value.shape())?;
     if region.rank >= plan.world_size()
         || region.extent.contains(&0)
-        || (0..2).any(|axis| region.origin[axis] + region.extent[axis] > value.shape()[axis])
+        || (0..2).any(|axis| {
+            region.origin[axis]
+                .checked_add(region.extent[axis])
+                .is_none_or(|end| end > shape[axis])
+        })
     {
         return Err(EmitError::Contract("out-of-bounds execution region".into()));
     }
@@ -409,5 +409,21 @@ fn overlaps(a: Region, b: Region) -> bool {
 
 pub(crate) fn full_region(plan: &PhysicalPlan, value: ValueInstanceId, rank: usize) -> Region {
     let shape = plan.value_instance(value).unwrap().shape();
-    Region::new(value, rank, [0, 0], [shape[0], shape[1]])
+    Region::new(
+        value,
+        rank,
+        [0, 0],
+        region_shape(shape).expect("validated emit shape"),
+    )
+}
+
+/// Vectors retain their public rank; only dependency geometry uses [L, 1].
+pub(crate) fn region_shape(shape: &[usize]) -> Result<[usize; 2], EmitError> {
+    match shape {
+        [length] => Ok([*length, 1]),
+        [rows, columns] => Ok([*rows, *columns]),
+        _ => Err(EmitError::Unsupported(
+            "only vectors and matrices are supported".into(),
+        )),
+    }
 }

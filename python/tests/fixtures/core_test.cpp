@@ -32,8 +32,8 @@ int main(int argc,char** argv) {
   try { b.close();assert(false); } catch(RuntimeFailure const& e) { assert(e.info.code==19); }
   fail_b(0,0);b.close();
 
-  BufferSpec spec{0,128,16,8,8,8,1,false};
-  TensorView tensor{1024,128,8,8,8,1,0,true,true,false};
+  BufferSpec spec{0,128,16,{8,8},{8,1},"bf16",false};
+  TensorView tensor{1024,128,{8,8},{8,1},"bf16",0,true,false};
   validate_tensor(spec,tensor,0);
 
   tensor.address+=2;
@@ -47,6 +47,25 @@ int main(int argc,char** argv) {
 
   spec.symmetric=true;
   try { validate_tensor(spec,tensor,0);assert(false); } catch(std::invalid_argument const&) {}
+
+  BufferSpec vector_spec{0,64,16,{16},{1},"fp32",false};
+  TensorView vector_view{1024,64,{16},{1},"fp32",0,true,false};
+  validate_tensor(vector_spec,vector_view,0);
+  auto rejects=[&](BufferSpec const& s,TensorView const& t) {
+    try { validate_tensor(s,t,0);assert(false); } catch(std::invalid_argument const&) {}
+  };
+  auto wrong_view=vector_view;
+  wrong_view.dtype="bf16"; rejects(vector_spec,wrong_view);
+  wrong_view=vector_view; wrong_view.shape={16,1}; wrong_view.strides={1,1}; rejects(vector_spec,wrong_view);
+  wrong_view=vector_view; wrong_view.available_bytes=63; rejects(vector_spec,wrong_view);
+  auto wrong_spec=vector_spec;
+  wrong_spec.bytes=32; rejects(wrong_spec,vector_view);
+  wrong_spec=vector_spec; wrong_spec.strides={2}; rejects(wrong_spec,vector_view);
+  wrong_spec=vector_spec; wrong_spec.shape={1,1,16}; wrong_spec.strides={16,16,1}; rejects(wrong_spec,vector_view);
+  wrong_spec=vector_spec; wrong_spec.dtype="fp64"; rejects(wrong_spec,vector_view);
+  wrong_spec=vector_spec; wrong_spec.alignment=3; rejects(wrong_spec,vector_view);
+  vector_spec.symmetric=true; vector_view.symmetric=true;
+  validate_tensor(vector_spec,vector_view,0);
 
   auto& queue=RetireQueue::instance();
   std::atomic<bool> event=false, destroyed=false;

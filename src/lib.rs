@@ -22,9 +22,10 @@ pub use dtype::DType;
 pub use emit::{CudaSource, EmitError, emit};
 pub use fusion::{FusionError, FusionRewrite, FusionRule, fuse};
 pub use implementation::{
-    AllGatherImplementation, AttributeSet, GemmImplementation, ImplementationDefinition,
-    ImplementationId, ImplementationInstance, all_gather_implementations, fusion_rules,
-    gemm_implementations,
+    AllGatherImplementation, AttributeSet, BroadcastImplementation, GemmImplementation,
+    ImplementationDefinition, ImplementationId, ImplementationInstance, PointwiseImplementation,
+    ReduceSumImplementation, all_gather_implementations, broadcast_implementations, fusion_rules,
+    gemm_implementations, pointwise_implementations, reduce_sum_implementations,
 };
 pub use physical::{
     Action, ActionId, CommunicationKind, CommunicationOperation, ComputeOperation, Operation,

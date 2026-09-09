@@ -78,7 +78,7 @@ public:
   void activate(std::uintptr_t owner);
   void deactivate(std::uintptr_t owner);
 
-  at::Tensor allocate(std::size_t bytes,std::size_t alignment,std::vector<std::int64_t> shape,bool bf16);
+  at::Tensor allocate(std::size_t bytes,std::size_t alignment,std::vector<std::int64_t> shape,std::string dtype);
   bool owns(at::Tensor const& tensor,std::size_t bytes) const;
   void record(at::Tensor const& tensor,std::uint64_t stream);
   void check_multicast(at::Tensor const& tensor);

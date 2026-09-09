@@ -114,15 +114,16 @@ void Module::close() {
 }
 
 static TensorView view(at::Tensor const& t,BufferSpec const& spec,Module const& module) {
-  if (!t.defined() || t.dim()!=2 || !t.is_cuda() || t.layout()!=at::kStrided)
-    throw std::invalid_argument("binding must be a strided CUDA matrix");
+  if (!t.defined() || (t.dim()!=1 && t.dim()!=2) || !t.is_cuda() || t.layout()!=at::kStrided)
+    throw std::invalid_argument("binding must be a strided CUDA vector or matrix");
 
   auto offset=static_cast<std::size_t>(t.storage_offset())*t.element_size();
   auto bytes=t.storage().nbytes();
   if (offset>bytes) throw std::invalid_argument("invalid Tensor storage offset");
 
-  return {reinterpret_cast<std::uintptr_t>(t.data_ptr()),bytes-offset,t.size(0),t.size(1),t.stride(0),t.stride(1),
-    t.get_device(),t.scalar_type()==at::kBFloat16,true,module.world && module.world->owns(t,spec.bytes)};
+  auto dtype=t.scalar_type()==at::kBFloat16 ? "bf16" : t.scalar_type()==at::kFloat ? "fp32" : "unsupported";
+  return {reinterpret_cast<std::uintptr_t>(t.data_ptr()),bytes-offset,t.sizes().vec(),t.strides().vec(),dtype,
+    t.get_device(),true,module.world && module.world->owns(t,spec.bytes)};
 }
 
 Execution::Execution(std::shared_ptr<Module> m,std::vector<BufferSpec> s,std::vector<at::Tensor> t,

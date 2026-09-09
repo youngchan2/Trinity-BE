@@ -88,7 +88,7 @@ def tensor_check(tensor, b, device, world):
     if (
         tensor.device != device
         or tensor.layout != torch.strided
-        or tensor.dtype != torch.bfloat16
+        or tensor.dtype != {"bf16": torch.bfloat16, "fp32": torch.float32}[b.dtype]
         or tuple(tensor.shape) != b.shape
         or tuple(tensor.stride()) != b.strides
     ):
@@ -99,9 +99,9 @@ def tensor_check(tensor, b, device, world):
 
     if (
         tensor.data_ptr() % b.alignment
-        or tensor.untyped_storage().nbytes() - tensor.storage_offset() * 2 < b.bytes
+        or tensor.untyped_storage().nbytes() - tensor.storage_offset() * tensor.element_size()
+        < b.bytes
     ):
-
         raise ValueError(f"binding {b.value}: alignment/storage mismatch")
 
     if b.symmetric and (world is None or not world._native.owns(tensor, b.bytes)):
@@ -214,7 +214,7 @@ class LoadedModule:
         import torch
 
         if b.symmetric:
-            tensor = self.world._native.allocate(b.bytes, b.alignment, list(b.shape), True)
+            tensor = self.world._native.allocate(b.bytes, b.alignment, list(b.shape), b.dtype)
             if self.requirements.nvls:
                 self.world._native.check_multicast(tensor)
             return tensor
@@ -222,7 +222,8 @@ class LoadedModule:
         # An overallocated byte storage supports requirements stronger than the allocator's alignment.
         owner = torch.empty(b.bytes + b.alignment - 1, dtype=torch.uint8, device=self.device)
         offset = (-owner.data_ptr()) % b.alignment
-        return owner[offset : offset + b.bytes].view(torch.bfloat16).view(b.shape)
+        dtype = {"bf16": torch.bfloat16, "fp32": torch.float32}[b.dtype]
+        return owner[offset : offset + b.bytes].view(dtype).view(b.shape)
 
     @world_guarded
     def allocate_io(self, inputs=None):
@@ -300,14 +301,20 @@ class LoadedModule:
                 workspace = self._stage(
                     "prepare.workspace",
                     lambda: self.world._native.allocate(
-                        req.workspace_bytes, req.workspace_alignment, [req.workspace_bytes], False
+                        req.workspace_bytes, req.workspace_alignment, [req.workspace_bytes], "uint8"
                     ),
                 )
 
             st = torch.cuda.current_stream(self.device)
             specs = [
                 native().BufferSpec(
-                    b.value, b.bytes, b.alignment, *b.shape, *b.strides, b.symmetric
+                    b.value,
+                    b.bytes,
+                    b.alignment,
+                    list(b.shape),
+                    list(b.strides),
+                    b.dtype,
+                    b.symmetric,
                 )
                 for b in req.buffers
             ]

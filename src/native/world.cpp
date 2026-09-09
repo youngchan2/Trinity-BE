@@ -119,17 +119,19 @@ void World::deactivate(std::uintptr_t owner) {
   if (active_==owner) active_=0;
 }
 
-at::Tensor World::allocate(std::size_t bytes,std::size_t alignment,std::vector<std::int64_t> shape,bool bf16) {
+at::Tensor World::allocate(std::size_t bytes,std::size_t alignment,std::vector<std::int64_t> shape,std::string dtype) {
   std::lock_guard<std::recursive_mutex> lock(mutex); healthy();
   if (active_) throw ResourceBusy("finish world execution before allocating symmetric memory");
   if (!bytes || !alignment || (alignment&(alignment-1))) throw std::invalid_argument("invalid symmetric allocation");
 
+  auto width=dtype=="bf16" ? 2u : dtype=="fp32" ? 4u : dtype=="uint8" ? 1u : 0u;
+  if (!width || alignment<width || shape.empty()) throw std::invalid_argument("invalid allocation dtype/alignment/shape");
   std::size_t count=1;
   for (auto extent:shape) {
     if (extent<=0 || count>bytes/static_cast<std::size_t>(extent)) throw std::invalid_argument("invalid allocation shape");
     count*=extent;
   }
-  if (count*(bf16?2:1)!=bytes) throw std::invalid_argument("allocation byte/shape mismatch");
+  if (bytes%width || count!=bytes/width) throw std::invalid_argument("allocation byte/shape mismatch");
 
   c10::cuda::CUDAGuard guard(device);
   auto allocation=std::make_shared<Allocation>();
@@ -143,7 +145,7 @@ at::Tensor World::allocate(std::size_t bytes,std::size_t alignment,std::vector<s
   }
 
   try {
-    auto options=at::TensorOptions().device(at::kCUDA,device).dtype(bf16?at::kBFloat16:at::kByte);
+    auto options=at::TensorOptions().device(at::kCUDA,device).dtype(dtype=="bf16"?at::kBFloat16:dtype=="fp32"?at::kFloat:at::kByte);
     return at::from_blob(allocation->pointer,shape,[allocation](void*) { allocation->leased.store(false); },options);
   } catch (...) { allocation->leased=false;throw; }
 }

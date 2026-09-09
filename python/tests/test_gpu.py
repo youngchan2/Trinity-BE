@@ -6,7 +6,7 @@ import torch
 import trinity_lowering as tl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
-from plans import gemm
+from plans import gemm, gemm_relu
 from test_compiler import identity
 
 pytestmark = pytest.mark.gpu
@@ -14,7 +14,7 @@ pytestmark = pytest.mark.gpu
 
 @pytest.mark.parametrize("m,n,k", [(128, 128, k) for k in (64, 128, 192, 320)] + [(256, 256, 192)])
 @torch.inference_mode()
-def test_gemm_repeated_side_stream_and_allocator(m, n, k):
+def test_gemm_bias_repeated_side_stream_and_allocator(m, n, k):
     artifact = tl.compile(tl.emit(gemm(m, n, k)))
     module = tl.load(artifact, "cuda:0")
     artifact.close()
@@ -23,10 +23,11 @@ def test_gemm_repeated_side_stream_and_allocator(m, n, k):
     with torch.cuda.stream(producer):
         x = torch.randn(m, k, device=module.device, dtype=torch.bfloat16)
         w = torch.randn(k, n, device=module.device, dtype=torch.bfloat16)
-        reference = (x.float() @ w.float()).bfloat16()
+        bias = torch.randn(m, n, device=module.device, dtype=torch.bfloat16)
+        reference = (x.float() @ w.float()).bfloat16() + bias
         produced = producer.record_event()
 
-    execution = module.prepare({"X": x, "W": w})
+    execution = module.prepare({"X": x, "W": w, "bias": bias})
 
     with pytest.raises(tl.ResourceBusy):
         module.close()
@@ -41,7 +42,7 @@ def test_gemm_repeated_side_stream_and_allocator(m, n, k):
     with pytest.raises(tl.ResourceBusy):
         execution.run(stream=consumer)
 
-    del x, w
+    del x, w, bias
     with torch.cuda.stream(consumer):
         consumer.wait_event(done)
         copy = first.clone()
@@ -60,23 +61,19 @@ def test_gemm_repeated_side_stream_and_allocator(m, n, k):
 
 
 @torch.inference_mode()
-def test_graph_with_pytorch_and_static_metadata():
-    artifact = tl.compile(tl.emit(gemm()))
+def test_graph_with_lowered_relu_and_static_metadata():
+    artifact = tl.compile(tl.emit(gemm_relu()))
     module = tl.load(artifact, "cuda:0")
     io = module.allocate_io()
     io.inputs["X"].normal_()
     io.inputs["W"].normal_()
+    io.inputs["bias"].normal_()
 
     execution = module.prepare(io.inputs, out=io.output)
-    bias = torch.randn_like(io.output)
     stream = torch.cuda.Stream(device=module.device)
     stream.wait_stream(torch.cuda.current_stream(module.device))
 
-    def step():
-        execution.run()
-        return torch.relu(execution.output + bias)
-
-    graph = tl.Graph.capture(step, executions=[execution], keepalive=[bias], stream=stream)
+    graph = tl.Graph.capture(execution.run, executions=[execution], stream=stream)
 
     with pytest.raises(tl.ResourceBusy):
         execution.close()
@@ -88,7 +85,9 @@ def test_graph_with_pytorch_and_static_metadata():
             graph.replay()
         snapshot = graph.output.clone()
     graph.wait(timeout=30)
-    reference = torch.relu((io.inputs["X"].float() @ io.inputs["W"].float()).bfloat16() + bias)
+    reference = torch.relu(
+        (io.inputs["X"].float() @ io.inputs["W"].float()).bfloat16() + io.inputs["bias"]
+    )
     torch.testing.assert_close(snapshot, reference, atol=0.125, rtol=0.02)
 
     with torch.cuda.stream(stream):

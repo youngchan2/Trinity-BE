@@ -5,6 +5,10 @@ mod fusion;
 mod hopper_wgmma;
 mod nvls;
 mod peer;
+mod tensor;
+
+static REDUCTIONS: &[&dyn super::ReduceSumImplementation] = &[&tensor::REDUCE_SUM];
+static BROADCASTS: &[&dyn super::BroadcastImplementation] = &[&tensor::BROADCAST];
 
 static HOPPER_FUSION_RULES: &[&dyn crate::FusionRule] = fusion::RULES;
 
@@ -40,4 +44,22 @@ pub(super) fn all_gather_implementations(
     match target {
         CudaTargetCapability::Hopper => HOPPER_ALL_GATHER_IMPLEMENTATIONS,
     }
+}
+
+pub(super) fn pointwise_implementations(
+    _: CudaTargetCapability,
+) -> &'static [&'static dyn super::PointwiseImplementation] {
+    tensor::POINTWISE
+}
+
+pub(super) fn reduce_sum_implementations(
+    _: CudaTargetCapability,
+) -> &'static [&'static dyn super::ReduceSumImplementation] {
+    REDUCTIONS
+}
+
+pub(super) fn broadcast_implementations(
+    _: CudaTargetCapability,
+) -> &'static [&'static dyn super::BroadcastImplementation] {
+    BROADCASTS
 }

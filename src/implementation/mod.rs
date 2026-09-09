@@ -4,6 +4,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 mod cuda;
+mod tensor;
+pub use tensor::{
+    BroadcastImplementation, PointwiseImplementation, ReduceSumImplementation,
+    broadcast_implementations, pointwise_implementations, reduce_sum_implementations,
+};
 
 use super::TargetCapability;
 use crate::DType;

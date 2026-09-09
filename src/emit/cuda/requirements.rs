@@ -31,9 +31,9 @@ pub struct BufferBindingRequirement {
     pub value: usize,
     pub input_names: Vec<String>,
     pub output_name: Option<String>,
-    pub shape: [usize; 2],
+    pub shape: Vec<usize>,
     pub dtype: crate::DType,
-    pub strides: [usize; 2],
+    pub strides: Vec<usize>,
     pub bytes: usize,
     pub alignment: usize,
     /// Whether this value is a program input/output rather than a Global intermediate.

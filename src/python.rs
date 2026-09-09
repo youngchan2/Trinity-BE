@@ -171,6 +171,159 @@ fn all_gather_implementations(target_name: &str) -> PyResult<Vec<AllGatherDefini
         .collect())
 }
 
+#[derive(Clone, Copy)]
+enum TensorFamily {
+    Pointwise,
+    ReduceSum,
+    Broadcast,
+}
+
+#[pyclass(frozen, module = "trinity_lowering._compiler")]
+struct TensorDefinition {
+    index: usize,
+    target: tl::TargetCapability,
+    family: TensorFamily,
+}
+
+#[pymethods]
+impl TensorDefinition {
+    #[getter]
+    fn id(&self) -> &str {
+        match self.family {
+            TensorFamily::Pointwise => tl::pointwise_implementations(self.target)[self.index]
+                .id()
+                .as_str(),
+            TensorFamily::ReduceSum => tl::reduce_sum_implementations(self.target)[self.index]
+                .id()
+                .as_str(),
+            TensorFamily::Broadcast => tl::broadcast_implementations(self.target)[self.index]
+                .id()
+                .as_str(),
+        }
+    }
+
+    #[pyo3(signature=(dtypes, shapes, *, scalar=None, axis=None))]
+    fn enumerate(
+        &self,
+        dtypes: Vec<String>,
+        shapes: Vec<Vec<usize>>,
+        scalar: Option<f32>,
+        axis: Option<usize>,
+    ) -> PyResult<Vec<Implementation>> {
+        let input_count = match self.family {
+            TensorFamily::Pointwise => {
+                tl::pointwise_implementations(self.target)[self.index].input_count()
+            }
+            _ => 1,
+        };
+        if dtypes.len() != input_count + 1
+            || shapes.len() != dtypes.len()
+            || shapes
+                .iter()
+                .any(|s| !matches!(s.len(), 1 | 2) || s.contains(&0))
+        {
+            return Err(bad(
+                "expected input/output dtypes and positive vector/matrix shapes",
+            ));
+        }
+        let ds: Vec<_> = dtypes.iter().map(|d| dtype(d)).collect::<PyResult<_>>()?;
+        let ss: Vec<_> = shapes.iter().map(Vec::as_slice).collect();
+        let instances = match self.family {
+            TensorFamily::Pointwise => {
+                let definition = tl::pointwise_implementations(self.target)[self.index];
+                if axis.is_some()
+                    || scalar.is_some() != definition.requires_scalar()
+                    || shapes.iter().any(|s| *s != shapes[0])
+                {
+                    return Err(bad(
+                        "pointwise shapes must match; only scalar_div requires scalar, and axis is not accepted",
+                    ));
+                }
+                definition.enumerate(&ds, &ss, scalar)
+            }
+            TensorFamily::ReduceSum => {
+                let axis = axis.unwrap_or(1);
+                if scalar.is_some()
+                    || shapes[0].len() != 2
+                    || axis >= 2
+                    || shapes[1] != vec![shapes[0][1 - axis]]
+                {
+                    return Err(bad(
+                        "reduction needs a matrix, a valid axis and its reduced vector shape",
+                    ));
+                }
+                tl::reduce_sum_implementations(self.target)[self.index].enumerate(
+                    [ds[0], ds[1]],
+                    [ss[0], ss[1]],
+                    axis,
+                )
+            }
+            TensorFamily::Broadcast => {
+                let axis = axis.unwrap_or(1);
+                if scalar.is_some()
+                    || shapes[1].len() != 2
+                    || axis >= 2
+                    || shapes[0] != vec![shapes[1][1 - axis]]
+                    || ds[0] != ds[1]
+                {
+                    return Err(bad(
+                        "broadcast needs a vector, matching matrix shape, valid axis and matching dtypes",
+                    ));
+                }
+                tl::broadcast_implementations(self.target)[self.index].enumerate(
+                    ds[0],
+                    [ss[0], ss[1]],
+                    axis,
+                )
+            }
+        };
+        Ok(instances
+            .into_iter()
+            .map(|instance| Implementation {
+                instance,
+                shapes: shapes.clone(),
+                dtypes: ds.clone(),
+                communication: false,
+                world_size: None,
+            })
+            .collect())
+    }
+}
+
+fn tensor_definitions(target_name: &str, family: TensorFamily) -> PyResult<Vec<TensorDefinition>> {
+    let target = target(target_name)?;
+    let count = match family {
+        TensorFamily::Pointwise => tl::pointwise_implementations(target).len(),
+        TensorFamily::ReduceSum => tl::reduce_sum_implementations(target).len(),
+        TensorFamily::Broadcast => tl::broadcast_implementations(target).len(),
+    };
+    Ok((0..count)
+        .map(|index| TensorDefinition {
+            index,
+            target,
+            family,
+        })
+        .collect())
+}
+
+#[pyfunction]
+#[pyo3(signature=(target_name="hopper"))]
+fn pointwise_implementations(target_name: &str) -> PyResult<Vec<TensorDefinition>> {
+    tensor_definitions(target_name, TensorFamily::Pointwise)
+}
+
+#[pyfunction]
+#[pyo3(signature=(target_name="hopper"))]
+fn reduce_sum_implementations(target_name: &str) -> PyResult<Vec<TensorDefinition>> {
+    tensor_definitions(target_name, TensorFamily::ReduceSum)
+}
+
+#[pyfunction]
+#[pyo3(signature=(target_name="hopper"))]
+fn broadcast_implementations(target_name: &str) -> PyResult<Vec<TensorDefinition>> {
+    tensor_definitions(target_name, TensorFamily::Broadcast)
+}
+
 #[pyclass(module = "trinity_lowering._compiler")]
 struct PhysicalPlanBuilder {
     builder: Option<tl::PhysicalPlanBuilder>,
@@ -242,7 +395,7 @@ impl PhysicalPlanBuilder {
             return Err(bad("implementation world size differs from builder"));
         }
         if outputs.len() != 1
-            || inputs.len() != if implementation.communication { 1 } else { 2 }
+            || inputs.len() + 1 != implementation.dtypes.len()
             || values.iter().map(|v| v.1).collect::<Vec<_>>() != implementation.dtypes
             || values.iter().map(|v| v.2.clone()).collect::<Vec<_>>() != implementation.shapes
         {
@@ -476,6 +629,7 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Implementation>()?;
     m.add_class::<GemmDefinition>()?;
     m.add_class::<AllGatherDefinition>()?;
+    m.add_class::<TensorDefinition>()?;
     m.add_class::<CudaSource>()?;
     m.add_class::<CudaArtifact>()?;
     m.add_class::<CompileConfig>()?;
@@ -483,6 +637,9 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(gemm_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(all_gather_implementations, m)?)?;
+    m.add_function(wrap_pyfunction!(pointwise_implementations, m)?)?;
+    m.add_function(wrap_pyfunction!(reduce_sum_implementations, m)?)?;
+    m.add_function(wrap_pyfunction!(broadcast_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(emit, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
 

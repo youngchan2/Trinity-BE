@@ -22,7 +22,6 @@ pytestmark = pytest.mark.cuda_runtime
 
 @pytest.fixture(scope="module")
 def library(tmp_path_factory):
-    root = Path(__file__).resolve().parents[1]
     temp = tmp_path_factory.mktemp("cuda-runtime")
     buffers = [
         dict(
@@ -54,6 +53,11 @@ def library(tmp_path_factory):
         nvshmem=False,
         nvls=False,
     )
+    return build_library(temp, data)
+
+
+def build_library(temp, data):
+    root = Path(__file__).resolve().parents[1]
     (temp / "fixture_metadata.h").write_text(
         "static constexpr char metadata[] = " + json.dumps(json.dumps(data)) + ";\n"
     )
@@ -69,6 +73,7 @@ def library(tmp_path_factory):
             "--cudart=shared",
             "-std=c++17",
             f"-arch=sm_{capability[0]}{capability[1]}",
+            f"-DFIXTURE_COPY_BYTES={data['buffers'][0]['bytes']}",
             "-I",
             str(root.parent / "src/emit/cuda"),
             "-I",
@@ -82,6 +87,44 @@ def library(tmp_path_factory):
     )
 
     return path, data
+
+
+@pytest.mark.parametrize("shape,dtype", [((129,), "bf16"), ((129,), "fp32"), ((3, 129), "fp32")])
+@torch.inference_mode()
+def test_typed_vectors_and_matrices_allocate_validate_and_replay(library, tmp_path, shape, dtype):
+    data = json.loads(json.dumps(library[1]))
+    for b in data["buffers"]:
+        b.update(
+            shape=list(shape),
+            strides=[1] if len(shape) == 1 else [shape[1], 1],
+            dtype=dtype,
+            bytes=torch.Size(shape).numel() * (2 if dtype == "bf16" else 4),
+        )
+    m = module(build_library(tmp_path, data))
+    io = m.allocate_io()
+    expected_dtype = torch.bfloat16 if dtype == "bf16" else torch.float32
+    assert io.inputs["X"].dtype == expected_dtype and tuple(io.output.shape) == shape
+    x = io.inputs["X"]
+    x.normal_()
+    with pytest.raises(ValueError, match="dtype"):
+        m.prepare({"X": x.to(torch.float64)})
+    with pytest.raises(ValueError, match="shape/stride"):
+        m.prepare({"X": torch.empty(*shape, 2, device="cuda", dtype=expected_dtype)[..., 0]})
+    e = m.prepare(io.inputs, out=io.output)
+    e.run()
+    e.wait(30)
+    assert torch.equal(e.output, x)
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    graph = tl.Graph.capture(lambda: e.run().clone(), executions=[e], stream=stream)
+    with torch.cuda.stream(stream):
+        x.fill_(3)
+        graph.replay()
+    graph.wait(30)
+    assert torch.equal(graph.output, x)
+    graph.close()
+    e.close()
+    m.close()
 
 
 def module(library):

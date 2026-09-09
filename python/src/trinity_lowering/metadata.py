@@ -1,6 +1,7 @@
 """CUDA-independent artifact validation. The native loader also checks embedded metadata."""
 
 import json
+import math
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -19,9 +20,9 @@ class BufferRequirement:
     value: int
     input_names: tuple[str, ...]
     output_name: str | None
-    shape: tuple[int, int]
+    shape: tuple[int, ...]
     dtype: str
-    strides: tuple[int, int]
+    strides: tuple[int, ...]
     bytes: int
     alignment: int
     external: bool
@@ -69,14 +70,16 @@ def requirements(data):
             }
         )
 
-        if b.value != index or b.dtype != "bf16" or len(b.shape) != 2:
+        if b.value != index or b.dtype not in ("bf16", "fp32") or len(b.shape) not in (1, 2):
             raise ValueError("invalid canonical binding/dtype/shape")
         for extent in b.shape:
             _positive(extent, "shape extent")
         _positive(b.alignment, "alignment")
-        if b.alignment & (b.alignment - 1) or b.strides != (b.shape[1], 1):
+        strides = (1,) if len(b.shape) == 1 else (b.shape[1], 1)
+        width = 2 if b.dtype == "bf16" else 4
+        if b.alignment < width or b.alignment & (b.alignment - 1) or b.strides != strides:
             raise ValueError("invalid alignment/strides")
-        if b.bytes != b.shape[0] * b.shape[1] * 2 or b.bytes > (2**31 - 1) * 2:
+        if b.bytes != math.prod(b.shape) * width or math.prod(b.shape) > 2**31 - 1:
             raise ValueError("invalid buffer bytes")
         if bool(b.input_names or b.output_name is not None) != b.external:
             raise ValueError("invalid external binding")
