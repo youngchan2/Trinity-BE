@@ -13,9 +13,6 @@ pub enum PhysicalInvariantError {
     #[error("input tensor `{tensor}` is bound more than once")]
     DuplicateInputTensor { tensor: String },
 
-    #[error("value instance {value} is bound to more than one input tensor")]
-    DuplicateInputValue { value: usize },
-
     #[error("value instance {value} referenced by {context} does not exist")]
     InvalidValueId { value: usize, context: &'static str },
 

@@ -81,11 +81,10 @@ fn validate_inputs(
                 tensor: input.tensor.clone(),
             });
         }
-        if !values.insert(input.value) {
-            return Err(PhysicalInvariantError::DuplicateInputValue {
-                value: input.value.index(),
-            });
-        }
+
+        // Multiple names may designate one canonical value. Runtime binding
+        // validation requires all aliases to reference exactly the same region.
+        values.insert(input.value);
     }
     Ok((values, names))
 }

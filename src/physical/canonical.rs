@@ -29,7 +29,9 @@ pub(super) fn canonicalize(
         .collect::<Vec<_>>();
     input_values.sort_by(|lhs, rhs| lhs.0.cmp(rhs.0));
     for (_, value) in input_values {
-        assign_value(value, &mut value_order, &mut value_remap);
+        if value_remap[value] == usize::MAX {
+            assign_value(value, &mut value_order, &mut value_remap);
+        }
     }
 
     let operation_order =

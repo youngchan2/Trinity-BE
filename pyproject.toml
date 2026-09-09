@@ -1,0 +1,77 @@
+[project]
+name = "trinity-lowering"
+version = "0.1.0"
+description = "Trinity physical compiler and prepared PyTorch CUDA execution"
+readme = "python/README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["torch==2.9.1"]
+
+[dependency-groups]
+dev = [
+  "pytest==8.4.2",
+  "setuptools==80.9.0",
+  "setuptools-rust==1.11.1",
+  "wheel==0.45.1",
+  "ninja==1.13.0",
+  "ruff==0.13.0",
+]
+
+[build-system]
+requires = ["setuptools==80.9.0", "setuptools-rust==1.11.1", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "python/src" }
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["python/src"]
+include = ["trinity_lowering*"]
+namespaces = false
+
+[[tool.setuptools-rust.ext-modules]]
+target = "trinity_lowering._compiler"
+path = "Cargo.toml"
+binding = "PyO3"
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "setup.py" },
+  { file = "MANIFEST.in" },
+  { file = "Cargo.toml" },
+  { file = "Cargo.lock" },
+  # Used when this checkout is a member of the parent Cargo workspace.
+  { file = "../../Cargo.lock" },
+  { file = "src/**/*" },
+  { file = "python/README.md" },
+  { file = "python/src/**/*.py" },
+  { env = "TRINITY_BUILD_CUDA" },
+  { env = "CUDA_HOME" },
+  { env = "NVSHMEM_HOME" },
+  { env = "CC" },
+  { env = "CXX" },
+  { env = "RUSTFLAGS" },
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+markers = [
+  "cuda_runtime: native runtime fixture on any CUDA 13 GPU (not generated Hopper kernels)",
+  "gpu: requires a Hopper GPU and CUDA native build",
+  "distributed: requires torchrun and Hopper/NVLink/NVSHMEM",
+  "toolkit: requires NVCC but no GPU",
+]
+addopts = "-m 'not gpu and not cuda_runtime and not distributed and not toolkit'"
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["third_party"]

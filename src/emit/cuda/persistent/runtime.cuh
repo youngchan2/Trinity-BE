@@ -226,8 +226,9 @@ __global__ void initialize(Context c) {
     unsigned long long previous = h->epoch;
     h->lock = h->head = h->tail = h->size = h->scan = h->complete = h->active =
         0;
-    h->error = (c.epoch == 0 || c.epoch <= previous) ? kInvalidEpoch : 0;
-    h->epoch = c.epoch;
+    // Never erase an earlier failure when calls are queued or a Graph replays.
+    if (previous == ~0ULL) fail(c, kInvalidEpoch);
+    else h->epoch = previous + 1;
   }
 
   for (unsigned slot = threadIdx.x; slot < kTasksPerRank; slot += blockDim.x) {
@@ -239,5 +240,5 @@ __global__ void initialize(Context c) {
 
   if (threadIdx.x == 0)
     system_atomic(workspace_at<unsigned long long>(c, kTokens) + kTasksPerRank)
-        .store(c.epoch, cuda::memory_order_release);
+        .store(h->epoch, cuda::memory_order_release);
 }

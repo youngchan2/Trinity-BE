@@ -170,6 +170,10 @@ pub(super) fn build(
     for rank in 0..plan.world_size() {
         // Add producers for this rank's PhysicalPlan inputs.
         for binding in plan.inputs() {
+            if !producers[rank][binding.value().index()].is_empty() {
+                continue; // Input aliases share a producer and readiness token.
+            }
+
             let value = plan.value_instance(binding.value()).unwrap();
 
             producers[rank][binding.value().index()].push(Producer {

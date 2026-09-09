@@ -72,6 +72,8 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
         }
 
         buffers.push(BufferBindingRequirement {
+            dtype: value.dtype(),
+            strides: [shape[1], 1],
             value: id.index(),
             shape,
             bytes: shape[0] * shape[1] * 2,

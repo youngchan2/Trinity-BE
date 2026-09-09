@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::platform::cuda::CudaTargetCapability;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CudaRequirements {
     pub target: CudaTargetCapability,
     /// CUDA architecture target required to compile the generated code (e.g. `sm_90a`).
@@ -32,6 +32,8 @@ pub struct BufferBindingRequirement {
     pub input_names: Vec<String>,
     pub output_name: Option<String>,
     pub shape: [usize; 2],
+    pub dtype: crate::DType,
+    pub strides: [usize; 2],
     pub bytes: usize,
     pub alignment: usize,
     /// Whether this value is a program input/output rather than a Global intermediate.

@@ -12,6 +12,9 @@ pub(super) struct CommonContext<'a> {
     launches: &'a [Launch],
     bodies: &'a [String],
     common_types: &'static str,
+    host_abi: &'static str,
+    requirements_literal: String,
+    execution_mode: usize,
 }
 
 impl<'a> CommonContext<'a> {
@@ -26,6 +29,10 @@ impl<'a> CommonContext<'a> {
             launches: &execution.launches,
             bodies,
             common_types: include_str!("types.cuh"),
+            host_abi: include_str!("abi.h"),
+            requirements_literal: serde_json::to_string(&serde_json::to_string(req).unwrap())
+                .unwrap(),
+            execution_mode: if req.world_size == 1 { 1 } else { 2 },
         }
     }
 }

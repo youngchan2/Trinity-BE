@@ -26,11 +26,16 @@ fn public_api_source_is_deterministic_and_preserves_binding_names() {
             .iter()
             .any(|b| b.input_names.iter().any(|s| s == "X with spaces\""))
     );
-    assert!(!a.code().contains("X with spaces"));
+
+    // Names occur only inside the escaped ABI metadata string, never as C++ identifiers.
+    let metadata = serde_json::to_string(&serde_json::to_string(req).unwrap()).unwrap();
+    assert!(a.code().contains(&format!("metadata[] = {metadata}")));
     assert!(!a.code().contains("#include <nvshmem.h>"));
     for buffer in &req.buffers {
         assert_eq!(buffer.bytes, buffer.shape.iter().product::<usize>() * 2);
         assert_eq!(buffer.alignment, 16);
+        assert_eq!(buffer.dtype, trinity_lowering::DType::Bf16);
+        assert_eq!(buffer.strides, [buffer.shape[1], 1]);
     }
     assert_eq!(req.workspace_bytes, 0);
     assert_eq!(req.workspace_alignment, 1);
@@ -41,7 +46,14 @@ fn public_api_source_is_deterministic_and_preserves_binding_names() {
 #[test]
 fn streamed_kernels_use_stream_order_without_a_device_scheduler() {
     let source = emit(&support::gemm_chain()).unwrap();
-    let code = source.code();
+
+    // The shared ABI descriptor declares both layouts; inspect only generated runtime code.
+    let code = source
+        .code()
+        .split("return &descriptor;\n}")
+        .nth(1)
+        .unwrap();
+
     // This is a generated ABI/runtime boundary: streamed callers need only
     // bindings and a stream, including when one GEMM consumes another's output.
     for forbidden in [
@@ -67,7 +79,7 @@ fn streamed_kernels_use_stream_order_without_a_device_scheduler() {
             "streamed execution contains {forbidden}"
         );
     }
-    assert!(code.contains("trinity_status(void* stream)"));
+    assert!(code.contains("trinity_status(void* stream, trinity::abi::ErrorInfo* error)"));
     assert!(code.contains("StreamedRuntime{}"));
     // Coordinate tables cover four producer tiles followed by two consumer
     // tiles. Streamed launch order must preserve that producer/consumer edge.
@@ -113,11 +125,9 @@ fn persistent_runtime_keeps_control_storage_and_stage_hooks() {
             assert!(source.code().contains(required), "missing {required}");
         }
         assert!(!source.code().contains("StreamedRuntime"));
-        assert!(
-            source
-                .code()
-                .contains("trinity_status(void const* workspace, void* stream)")
-        );
+        assert!(source.code().contains(
+            "trinity_status(void const* workspace, void* stream, trinity::abi::ErrorInfo* error)"
+        ));
     }
 }
 
@@ -434,4 +444,16 @@ fn rejects_tensor_spans_that_exceed_cute_index_width() {
             assert!(matches!(result, Err(EmitError::Unsupported(_))));
         }
     }
+}
+
+#[test]
+fn persistent_epoch_is_gpu_owned_and_failure_is_sticky() {
+    let source = emit(&support::gemm(128, 128, 64, 2)).unwrap();
+    let code = source.code();
+
+    assert!(code.contains("h->epoch = previous + 1"));
+    assert!(code.contains("c.epoch = header(c)->epoch"));
+    assert!(code.contains("previous == ~0ULL"));
+    assert!(!code.contains("p->epoch"));
+    assert!(!code.contains("h->error = 0"));
 }

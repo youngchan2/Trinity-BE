@@ -5,7 +5,8 @@ struct Task {
   Range dependencies, stages;
 };
 enum PersistentError : int {
-  kInvalidEpoch = -1, kPeerUnavailable = -2, kCollectiveFailed = -3
+  kInvalidEpoch = -1, kPeerUnavailable = -2, kCollectiveFailed = -3,
+  kNvshmemNotInitialized = -8, kReleaseRequired = -9
 };
 struct Header {
   unsigned lock, head, tail, size, scan, complete, active;
@@ -27,17 +28,6 @@ struct Context {
 };
 
 // Caller owns allocations. Workspace is zeroed once before its first launch.
-// Multi-rank callers supply identical, increasing epochs and do not overlap
-// invocations sharing allocations. Delay fields are verification controls.
-struct LaunchParams {
-  void* const* bindings;
-  std::size_t binding_count;
-  void* workspace;
-  std::size_t workspace_bytes;
-  void* stream;
-  unsigned worker_count;
-  unsigned long long epoch;
-  int delay_rank = -1;
-  int delay_task = -1;
-  unsigned long long delay_cycles = 0;
-};
+// Initialization advances the device epoch on actual execution, including Graph
+// replay. Delay fields are verification controls, not Python public arguments.
+using LaunchParams = trinity::abi::PersistentLaunch;

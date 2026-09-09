@@ -247,3 +247,33 @@ fn finalization_rejects_duplicate_physical_operations() {
         Err(PhysicalInvariantError::DuplicateOperation { .. })
     ));
 }
+
+#[test]
+fn input_aliases_share_one_canonical_value_and_are_order_independent() {
+    let build = |reverse: bool| {
+        let mut b =
+            PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
+        let x = b.add_value(DType::Bf16, [128, 128], Storage::External);
+
+        for name in if reverse {
+            ["second", "first"]
+        } else {
+            ["first", "second"]
+        } {
+            b.bind_input(name, x);
+        }
+
+        b.finalize("output", x).unwrap()
+    };
+
+    let a = build(false);
+    let b = build(true);
+
+    assert_eq!(a.hash(), b.hash());
+    assert_eq!(a.value_instances().count(), 1);
+    assert_eq!(a.inputs()[0].value(), a.inputs()[1].value());
+    assert_eq!(a.output().value(), a.inputs()[0].value());
+
+    let emitted = crate::emit(&a).unwrap();
+    assert_eq!(emitted.requirements().buffers[0].input_names.len(), 2);
+}

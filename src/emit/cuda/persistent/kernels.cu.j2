@@ -6,6 +6,8 @@ __device__ bool dispatch(Context const& c, Task const& task, void* storage) {
 }
 
 __global__ void persistent_kernel(Context c) {
+  c.epoch = header(c)->epoch;
+
   extern __shared__ __align__(128) unsigned char storage[];
   __shared__ int slot;
   __shared__ bool reserved;
