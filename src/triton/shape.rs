@@ -1,5 +1,5 @@
 use super::{Error, Options, invalid};
-use crate::analyzer::{AccessInfo, IndexDim, IndexExpr, ProgramAnalysis, ScopeId};
+use crate::analysis::{AccessInfo, IndexDim, IndexExpr, ProgramAnalysis, ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AxisAccess {

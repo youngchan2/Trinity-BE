@@ -80,8 +80,17 @@ impl Parser<'_> {
     }
 
     fn whitespace(&mut self) {
-        while self.pos < self.text.len() && self.text.as_bytes()[self.pos].is_ascii_whitespace() {
-            self.pos += 1;
+        loop {
+            while self.pos < self.text.len() && self.text.as_bytes()[self.pos].is_ascii_whitespace()
+            {
+                self.pos += 1;
+            }
+            if self.text.as_bytes().get(self.pos) != Some(&b';') {
+                break;
+            }
+            while self.pos < self.text.len() && self.text.as_bytes()[self.pos] != b'\n' {
+                self.pos += 1;
+            }
         }
     }
 
@@ -89,7 +98,7 @@ impl Parser<'_> {
         let start = self.pos;
         while self.pos < self.text.len() {
             let byte = self.text.as_bytes()[self.pos];
-            if byte.is_ascii_whitespace() || matches!(byte, b'(' | b')') {
+            if byte.is_ascii_whitespace() || matches!(byte, b'(' | b')' | b';') {
                 break;
             }
             self.pos += 1;

@@ -86,6 +86,8 @@ pub struct AccessInfo {
     pub index: Vec<IndexDim>,
     /// Per-access contiguous view dimensions, in layout order.
     pub view_shape: Option<Vec<IndexExpr>>,
+    /// Named axes in layout order. Names are labels, never storage identities.
+    pub view_axes: Option<Vec<String>>,
     pub source_span: Option<SourceSpan>,
 }
 
@@ -101,6 +103,14 @@ pub enum ScopeKind {
     Kernel,
     ParallelLoop,
     SequentialLoop,
+    /// The parallel binding of an mloop. Its child serial scope binds n_var.
+    SplitLoop,
+}
+
+impl ScopeKind {
+    pub fn is_parallel(self) -> bool {
+        matches!(self, Self::ParallelLoop | Self::SplitLoop)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

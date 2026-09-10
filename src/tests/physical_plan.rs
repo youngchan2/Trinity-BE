@@ -1,4 +1,4 @@
-use trinity_lowering::{
+use crate::{
     CommunicationKind, CommunicationOperation, ComputeOperation, DType, OperationPayload,
     PhysicalPlan, PhysicalPlanBuilder, Storage, TargetCapability, all_gather_implementations,
     gemm_implementations,

@@ -1,0 +1,312 @@
+;; Stage 20: 후처리된 batched MLA IR — 영역별 tensor-level 설명
+;;
+;; Tensor-level 표기: H=128, K=128, M=512, B=batch 크기, P=cache 토큰 수.
+;; Q: [B,H,1,K], C = CKV_cache: [B,P,M].
+;; WK[h] = W_DK[:, h*K:(h+1)*K].T  # [K,M]
+;; WV[h] = W_DV[:, h*K:(h+1)*K]    # [M,K]
+;; T1 = __fission_t1, T2 = __fission_t2; 설명에서는 singleton q 축을 생략한다.
+;; T1/T2: [B,H,M], O: [B,H,1,K]. q_h_q는 head tile의 시작 위치이다.
+;; n은 head별 weight column tile의 시작 위치이며, 해당 head는 h=n/128이다.
+;; 아래 수식의 h_tile/p_tile은 현재 loop가 담당하는 head/cache 구간이다.
+;; 누적식 +=는 0 초기값을 전제로 읽는다. IR의 기존 load + RHS 표기는 유지한다.
+;; exp(score)에는 scale이나 max subtraction이 포함되어 있지 않다.
+;;
+;; 원본 postprocess_v2 결과의 no-op과 빈 loop/seq만 정리했다.
+;; 살아 있는 store의 순서, RHS, loop 종류/범위와 tensor/axis 이름은 유지했다.
+;; 후처리 입력은 ?tmp1/?tmp2를 __fission_t1/__fission_t2로 치환했으며,
+;; multi_enode_tile_sets는 빈 값이었다.
+
+(seq
+  ;; ----------------------------------------------------------------------------
+  ;; [1] Query를 latent 공간으로 projection.
+  ;; T1[b,h,:] = Q[b,h,0,:] @ WK[h]  # [B,H,M]
+  ;; ploop chain: b -> n -> m; grid = (ceil(B/tile_b), H, ceil(M/tile_m)).
+  ;; ----------------------------------------------------------------------------
+  (ploop 0 B tile_b b
+    ;; head별 weight tile 순회: n=128*h, h는 0..H-1.
+    (ploop 0 16384 128 n
+      ;; T1의 latent 출력 축 M을 tile_m 크기로 분할.
+      (ploop 0 512 tile_m m
+        ;; [1-a] 현재 batch/head/latent tile의 T1을 계산한다.
+        ;; T1[b_tile,h,m_tile] = Q[b_tile,h,0,:] @ WK[h][:,m_tile].
+        (store
+          (view (tensor __fission_t1) (layout (axis b B) (axis h 128) (axis q 1) (axis m 512)))
+          (@
+            (load
+              (view (input Q) (layout (axis b B) (axis h 128) (axis q 1) (axis k 128)))
+              (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot k fulltile) (slot q fulltile))
+            )
+            (unsqueeze
+              (permute
+                (bcast
+                  (load
+                    (view (input W_DK) (layout (axis m 512) (axis n 16384)))
+                    (keyed_index (slot m (tile m tile_m)) (slot n (tile n 128)))
+                  )
+                  0
+                )
+                0
+                2
+                1
+              )
+              1
+            )
+          )
+          (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot m (tile m tile_m)) (slot q fulltile))
+        )
+      )
+    )
+  )
+  (seq
+    ;; ----------------------------------------------------------------------------
+    ;; [2] Cache 구간을 split하여 attention 분자/분모의 부분합을 계산.
+    ;; s = ?msplit_S_sum, NS = ?nsplit_S_sum; C_s는 split s의 cache 구간.
+    ;; E_s = exp(T1 @ C_s.transpose(0,2,1))
+    ;; ?split_S_sum[s] = E_s.sum(axis=-1)  # 전체 tensor: [NS,B,H]
+    ;; ?split_tmp2[s] = E_s @ C_s          # 전체 tensor: [NS,B,H,M]
+    ;; b/head tile 및 split은 병렬이고, 각 split 내부의 p tile은 순차 누적한다.
+    ;; grid = (ceil(B/tile_b), ceil(H/tile_q_h_q), NS).
+    ;; 두 store의 score/exp RHS는 각각 IR에 나타나는 그대로 유지한다.
+    ;; ----------------------------------------------------------------------------
+    (ploop 0 B tile_b b
+      ;; head 축 H를 tile_q_h_q 크기로 분할.
+      (ploop 0 128 tile_q_h_q q_h_q
+        ;; mloop: split별 cache 구간에서 p tile을 순차 순회한다.
+        ;; 각 split은 자신의 ?split_S_sum / ?split_tmp2 부분합을 누적한다.
+        ;; split_S_sum은 Softmax 분모를 위한 accumulator 필요
+        (mloop 0 P tile_p p ?msplit_S_sum ?nsplit_S_sum
+          (seq
+            ;; [2-a] 현재 split의 denominator 부분합을 누적한다.
+            ;; ?split_S_sum[s,:,h_tile] += exp(T1_tile @ C_tile.T).sum(axis=-1).
+            ;; C_tile.T는 batch를 유지한 마지막 두 축의 transpose이다.
+            (store
+              (view
+                (tensor ?split_S_sum)
+                (layout (axis ?msplit_S_sum ?nsplit_S_sum) (axis b B) (axis q_h_q 128))
+              )
+              (+
+                (load
+                  (view
+                    (tensor ?split_S_sum)
+                    (layout (axis ?msplit_S_sum ?nsplit_S_sum) (axis b B) (axis q_h_q 128))
+                  )
+                  (keyed_index
+                    (slot b (tile b tile_b))
+                    (slot q_h_q (tile q_h_q tile_q_h_q))
+                    (slot ?msplit_S_sum (elem ?msplit_S_sum))
+                  )
+                )
+                (unsqueeze
+                  (rsum
+                    (exp
+                      (@
+                        (load
+                          (view (tensor __fission_t1) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                          (keyed_index
+                            (slot b (tile b tile_b))
+                            (slot m fulltile)
+                            (slot q_h_q (tile q_h_q tile_q_h_q))
+                          )
+                        )
+                        (permute
+                          (load
+                            (view (input CKV_cache) (layout (axis b B) (axis p P) (axis m 512)))
+                            (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot p (tile p tile_p)))
+                          )
+                          0
+                          2
+                          1
+                        )
+                      )
+                    )
+                    2
+                  )
+                  0
+                )
+              )
+              (keyed_index
+                (slot b (tile b tile_b))
+                (slot q_h_q (tile q_h_q tile_q_h_q))
+                (slot ?msplit_S_sum (elem ?msplit_S_sum))
+              )
+            )
+            ;; [2-b] 현재 split의 latent numerator 부분합을 누적한다.
+            ;; ?split_tmp2[s,:,h_tile,:] += exp(T1_tile @ C_tile.T) @ C_tile.
+            ;; 마지막 C_tile 곱하는 과정에서 Split-K로 인한 accumulator 필요
+            (store
+              (view
+                (tensor ?split_tmp2)
+                (layout (axis ?msplit_S_sum ?nsplit_S_sum) (axis b B) (axis q_h_q 128) (axis m 512))
+              )
+              (+
+                (load
+                  (view
+                    (tensor ?split_tmp2)
+                    (layout (axis ?msplit_S_sum ?nsplit_S_sum) (axis b B) (axis q_h_q 128) (axis m 512))
+                  )
+                  (keyed_index
+                    (slot b (tile b tile_b))
+                    (slot m fulltile)
+                    (slot q_h_q (tile q_h_q tile_q_h_q))
+                    (slot ?msplit_S_sum (elem ?msplit_S_sum))
+                  )
+                )
+                (unsqueeze
+                  (@
+                    (exp
+                      (@
+                        (load
+                          (view (tensor __fission_t1) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                          (keyed_index
+                            (slot b (tile b tile_b))
+                            (slot m fulltile)
+                            (slot q_h_q (tile q_h_q tile_q_h_q))
+                          )
+                        )
+                        (permute
+                          (load
+                            (view (input CKV_cache) (layout (axis b B) (axis p P) (axis m 512)))
+                            (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot p (tile p tile_p)))
+                          )
+                          0
+                          2
+                          1
+                        )
+                      )
+                    )
+                    (load
+                      (view (input CKV_cache) (layout (axis b B) (axis p P) (axis m 512)))
+                      (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot p (tile p tile_p)))
+                    )
+                  )
+                  0
+                )
+              )
+              (keyed_index
+                (slot b (tile b tile_b))
+                (slot m fulltile)
+                (slot q_h_q (tile q_h_q tile_q_h_q))
+                (slot ?msplit_S_sum (elem ?msplit_S_sum))
+              )
+            )
+          )
+        )
+      )
+    )
+    ;; ----------------------------------------------------------------------------
+    ;; [3] Split 부분합을 합산/정규화한 뒤 head별 출력 projection.
+    ;; N = ?split_tmp2.sum(axis=0)     # [B,H,M]
+    ;; D = ?split_S_sum.sum(axis=0)    # [B,H]
+    ;; T2 = N / D[...,None]; O[b,h,0,:] = T2[b,h,:] @ WV[h]
+    ;; ploop chain: b -> q_h_q; grid = (ceil(B/tile_b), ceil(H/tile_q_h_q)).
+    ;; cell sloop은 이 영역 내부에서 실행하며 grid 축을 추가하지 않는다.
+    ;; 첫 T2 store와 나눗셈 RHS에 있는 numerator reduction을 모두 유지한다.
+    ;; 아래 ?msplit_tmp2/?nsplit_tmp2는 원본의 split axis 이름 그대로이다.
+    ;; 동일한 ?split_tmp2를 읽으므로 실제 split extent는 생산자의 NS와 같아야 한다.
+    ;; ----------------------------------------------------------------------------
+    (ploop 0 B tile_b b
+      ;; head 축 H를 tile_q_h_q 크기로 분할.
+      (ploop 0 128 tile_q_h_q q_h_q
+        (seq
+          ;; [3-a] T2[:,h_tile,:] = ?split_tmp2[:,batch_tile,h_tile,:].sum(axis=0).
+          (store
+            (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+            (rsum
+              (load
+                (view
+                  (tensor ?split_tmp2)
+                  (layout (axis ?msplit_tmp2 ?nsplit_tmp2) (axis b B) (axis q_h_q 128) (axis m 512))
+                )
+                (keyed_index
+                  (slot b (tile b tile_b))
+                  (slot m fulltile)
+                  (slot q_h_q (tile q_h_q tile_q_h_q))
+                  (slot ?msplit_tmp2 fulltile)
+                )
+              )
+              0
+            )
+            (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot q_h_q (tile q_h_q tile_q_h_q)))
+          )
+          (seq
+            ;; [3-b] T2 = ?split_tmp2.sum(axis=0) / ?split_S_sum.sum(axis=0)[...,None].
+            ;; 현재 batch/head tile에 대한 식. 분자는 직전 T2 load가 아닌 rsum 표현식이다.
+            (store
+              (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+              (/
+                (rsum
+                  (load
+                    (view
+                      (tensor ?split_tmp2)
+                      (layout (axis ?msplit_tmp2 ?nsplit_tmp2) (axis b B) (axis q_h_q 128) (axis m 512))
+                    )
+                    (keyed_index
+                      (slot b (tile b tile_b))
+                      (slot m fulltile)
+                      (slot q_h_q (tile q_h_q tile_q_h_q))
+                      (slot ?msplit_tmp2 fulltile)
+                    )
+                  )
+                  0
+                )
+                (bcast
+                  (rsum
+                    (load
+                      (view
+                        (tensor ?split_S_sum)
+                        (layout (axis ?msplit_S_sum ?nsplit_S_sum) (axis b B) (axis q_h_q 128))
+                      )
+                      (keyed_index
+                        (slot b (tile b tile_b))
+                        (slot q_h_q (tile q_h_q tile_q_h_q))
+                        (slot ?msplit_S_sum fulltile)
+                      )
+                    )
+                    0
+                  )
+                  2
+                )
+              )
+              (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot q_h_q (tile q_h_q tile_q_h_q)))
+            )
+            ;; 현재 head tile 안에서 cell을 하나씩 선택하여 WV projection을 수행한다.
+            ;; h = q_h_q .. q_h_q + tile_q_h_q - 1.
+            (sloop q_h_q (+ q_h_q tile_q_h_q) 1 ?lv_cell
+              ;; [3-c] h=?lv_cell에 대해 O[b_tile,h,0,:] = T2[b_tile,h,:] @ WV[h].
+              (store
+                (view (output O) (layout (axis b B) (axis h 128) (axis q 1) (axis k 128)))
+                (@
+                  (load
+                    (view (tensor __fission_t2) (layout (axis b B) (axis h 128) (axis q 1) (axis m 512)))
+                    (keyed_index
+                      (slot b (tile b tile_b))
+                      (slot h (elem ?lv_cell))
+                      (slot m fulltile)
+                      (slot q fulltile)
+                    )
+                  )
+                  (unsqueeze
+                    (bcast
+                      (load
+                        (view (input W_DV) (layout (axis m 512) (axis n 16384)))
+                        (keyed_index (slot m fulltile) (slot n (tile (* ?lv_cell 128) 128)))
+                      )
+                      0
+                    )
+                    1
+                  )
+                )
+                (keyed_index
+                  (slot b (tile b tile_b))
+                  (slot h (elem ?lv_cell))
+                  (slot k fulltile)
+                  (slot q fulltile)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)

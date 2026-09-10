@@ -1,5 +1,7 @@
 use crate::*;
 
+mod physical_plan;
+
 #[test]
 fn lowering_config_carries_the_target_capability() {
     let config = LoweringConfig::new(TargetCapability::Hopper);

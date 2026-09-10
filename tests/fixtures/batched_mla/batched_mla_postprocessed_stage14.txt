@@ -1,0 +1,241 @@
+;; Stage 14: 후처리된 batched MLA IR — 영역별 tensor-level 설명
+;;
+;; Tensor-level 표기: H=128, K=128, M=512, B=batch 크기, P=cache 토큰 수.
+;; Q: [B,H,1,K], C = CKV_cache: [B,P,M].
+;; WK[h] = W_DK[:, h*K:(h+1)*K].T  # [K,M]
+;; WV[h] = W_DV[:, h*K:(h+1)*K]    # [M,K]
+;; T1 = __fission_t1, T2 = __fission_t2; 설명에서는 singleton q 축을 생략한다.
+;; T1/T2: [B,H,M], O: [B,H,1,K]. q_h_q는 head tile의 시작 위치이다.
+;; n은 head별 weight column tile의 시작 위치이며, 해당 head는 h=n/128이다.
+;; 아래 수식의 h_tile/p_tile은 현재 loop가 담당하는 head/cache 구간이다.
+;; 누적식 +=는 0 초기값을 전제로 읽는다. IR의 기존 load + RHS 표기는 유지한다.
+;; exp(score)에는 scale이나 max subtraction이 포함되어 있지 않다.
+;;
+;; 원본 postprocess_v2 결과의 no-op과 빈 loop/seq만 정리했다.
+;; 살아 있는 store의 순서, RHS, loop 종류/범위와 tensor/axis 이름은 유지했다.
+;; 후처리 입력은 ?tmp1/?tmp2를 __fission_t1/__fission_t2로 치환했으며,
+;; multi_enode_tile_sets는 빈 값이었다.
+
+(seq
+  ;; ----------------------------------------------------------------------------
+  ;; [1] Query를 latent 공간으로 projection.
+  ;; T1[b,h,:] = Q[b,h,0,:] @ WK[h]  # [B,H,M]
+  ;; ploop chain: b -> n -> m; grid = (ceil(B/tile_b), H, ceil(M/tile_m)).
+  ;; ----------------------------------------------------------------------------
+  (ploop 0 B tile_b b
+    ;; head별 weight tile 순회: n=128*h, h는 0..H-1.
+    (ploop 0 16384 128 n
+      ;; T1의 latent 출력 축 M을 tile_m 크기로 분할.
+      (ploop 0 512 tile_m m
+        ;; [1-a] 현재 batch/head/latent tile의 T1을 계산한다.
+        ;; T1[b_tile,h,m_tile] = Q[b_tile,h,0,:] @ WK[h][:,m_tile].
+        (store
+          (view (tensor __fission_t1) (layout (axis b B) (axis h 128) (axis q 1) (axis m 512)))
+          (@
+            (load
+              (view (input Q) (layout (axis b B) (axis h 128) (axis q 1) (axis k 128)))
+              (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot k fulltile) (slot q fulltile))
+            )
+            (unsqueeze
+              (permute
+                (bcast
+                  (load
+                    (view (input W_DK) (layout (axis m 512) (axis n 16384)))
+                    (keyed_index (slot m (tile m tile_m)) (slot n (tile n 128)))
+                  )
+                  0
+                )
+                0
+                2
+                1
+              )
+              1
+            )
+          )
+          (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot m (tile m tile_m)) (slot q fulltile))
+        )
+      )
+    )
+  )
+  (seq
+    ;; ----------------------------------------------------------------------------
+    ;; [2] Attention score/exp와 latent context 누적, 정규화.
+    ;; S = T1 @ C.transpose(0,2,1)       # [B,H,P]
+    ;; E = exp(S); D = E.sum(axis=-1)    # D: [B,H]
+    ;; T2 = (E @ C) / D[...,None]        # [B,H,M]
+    ;; 실제 IR은 p tile을 sloop으로 순회해 분자/분모를 누적한 뒤 한 번 나눈다.
+    ;; ploop chain: b -> q_h_q; grid = (ceil(B/tile_b), ceil(H/tile_q_h_q)).
+    ;; 출력 projection은 다음 [3] 영역에서 실행한다.
+    ;; ----------------------------------------------------------------------------
+    (ploop 0 B tile_b b
+      ;; head 축 H를 tile_q_h_q 크기로 분할.
+      (ploop 0 128 tile_q_h_q q_h_q
+        (seq
+          ;; Cache의 p tile을 순차 순회한다. S_sum과 T2는 반복 간 누적값이다.
+          (sloop 0 P tile_p p
+            (seq
+              ;; [2-a] S[:,h_tile,p_tile] = T1[:,h_tile,:] @ C[:,p_tile,:].transpose(0,2,1).
+              (store
+                (view (tensor S) (layout (axis b B) (axis q_h_q 128) (axis p P)))
+                (@
+                  (load
+                    (view (tensor __fission_t1) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                    (keyed_index
+                      (slot b (tile b tile_b))
+                      (slot m fulltile)
+                      (slot q_h_q (tile q_h_q tile_q_h_q))
+                    )
+                  )
+                  (permute
+                    (load
+                      (view (input CKV_cache) (layout (axis b B) (axis p P) (axis m 512)))
+                      (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot p (tile p tile_p)))
+                    )
+                    0
+                    2
+                    1
+                  )
+                )
+                (keyed_index
+                  (slot b (tile b tile_b))
+                  (slot p (tile p tile_p))
+                  (slot q_h_q (tile q_h_q tile_q_h_q))
+                )
+              )
+              (seq
+                ;; [2-b] S_exp[:,h_tile,p_tile] = exp(S[:,h_tile,p_tile]).
+                (store
+                  (view (tensor S_exp) (layout (axis b B) (axis q_h_q 128) (axis p P)))
+                  (exp
+                    (load
+                      (view (tensor S) (layout (axis b B) (axis q_h_q 128) (axis p P)))
+                      (keyed_index
+                        (slot b (tile b tile_b))
+                        (slot q_h_q (tile q_h_q tile_q_h_q))
+                        (slot p (tile p tile_p))
+                      )
+                    )
+                  )
+                  (keyed_index
+                    (slot b (tile b tile_b))
+                    (slot q_h_q (tile q_h_q tile_q_h_q))
+                    (slot p (tile p tile_p))
+                  )
+                )
+                (seq
+                  ;; [2-c] S_sum[:,h_tile] += exp(S[:,h_tile,p_tile]).sum(axis=-1).
+                  ;; 이 RHS는 S_exp load 대신 exp(S)를 사용한다.
+                  (store
+                    (view (tensor S_sum) (layout (axis b B) (axis q_h_q 128)))
+                    (+
+                      (load
+                        (view (tensor S_sum) (layout (axis b B) (axis q_h_q 128)))
+                        (keyed_index (slot b (tile b tile_b)) (slot q_h_q (tile q_h_q tile_q_h_q)))
+                      )
+                      (rsum
+                        (exp
+                          (load
+                            (view (tensor S) (layout (axis b B) (axis q_h_q 128) (axis p P)))
+                            (keyed_index
+                              (slot b (tile b tile_b))
+                              (slot q_h_q (tile q_h_q tile_q_h_q))
+                              (slot p (tile p tile_p))
+                            )
+                          )
+                        )
+                        2
+                      )
+                    )
+                    (keyed_index (slot b (tile b tile_b)) (slot q_h_q (tile q_h_q tile_q_h_q)))
+                  )
+                  ;; [2-d] T2[:,h_tile,:] += S_exp[:,h_tile,p_tile] @ C[:,p_tile,:].
+                  (store
+                    (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                    (+
+                      (load
+                        (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                        (keyed_index
+                          (slot b (tile b tile_b))
+                          (slot m fulltile)
+                          (slot q_h_q (tile q_h_q tile_q_h_q))
+                        )
+                      )
+                      (@
+                        (load
+                          (view (tensor S_exp) (layout (axis b B) (axis q_h_q 128) (axis p P)))
+                          (keyed_index
+                            (slot b (tile b tile_b))
+                            (slot p (tile p tile_p))
+                            (slot q_h_q (tile q_h_q tile_q_h_q))
+                          )
+                        )
+                        (load
+                          (view (input CKV_cache) (layout (axis b B) (axis p P) (axis m 512)))
+                          (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot p (tile p tile_p)))
+                        )
+                      )
+                    )
+                    (keyed_index
+                      (slot b (tile b tile_b))
+                      (slot m fulltile)
+                      (slot q_h_q (tile q_h_q tile_q_h_q))
+                    )
+                  )
+                )
+              )
+            )
+          )
+          ;; [2-e] p sloop 종료 후 T2[:,h_tile,:] /= S_sum[:,h_tile,None].
+          (store
+            (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+            (/
+              (load
+                (view (tensor __fission_t2) (layout (axis b B) (axis q_h_q 128) (axis m 512)))
+                (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot q_h_q (tile q_h_q tile_q_h_q)))
+              )
+              (bcast
+                (load
+                  (view (tensor S_sum) (layout (axis b B) (axis q_h_q 128)))
+                  (keyed_index (slot b (tile b tile_b)) (slot q_h_q (tile q_h_q tile_q_h_q)))
+                )
+                2
+              )
+            )
+            (keyed_index (slot b (tile b tile_b)) (slot m fulltile) (slot q_h_q (tile q_h_q tile_q_h_q)))
+          )
+        )
+      )
+    )
+    ;; ----------------------------------------------------------------------------
+    ;; [3] 정규화된 latent context를 각 head의 출력 공간으로 projection.
+    ;; O[b,h,0,:] = T2[b,h,:] @ WV[h]  # [B,H,1,K]
+    ;; ploop chain: b -> n; grid = (ceil(B/tile_b), H).
+    ;; ----------------------------------------------------------------------------
+    (ploop 0 B tile_b b
+      ;; head별 weight tile 순회: n=128*h, h는 0..H-1.
+      (ploop 0 16384 128 n
+        ;; [3-a] O[b_tile,h,0,:] = T2[b_tile,h,:] @ WV[h].
+        (store
+          (view (output O) (layout (axis b B) (axis h 128) (axis q 1) (axis k 128)))
+          (@
+            (load
+              (view (tensor __fission_t2) (layout (axis b B) (axis h 128) (axis q 1) (axis m 512)))
+              (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot m fulltile) (slot q fulltile))
+            )
+            (unsqueeze
+              (bcast
+                (load
+                  (view (input W_DV) (layout (axis m 512) (axis n 16384)))
+                  (keyed_index (slot m fulltile) (slot n (tile n 128)))
+                )
+                0
+              )
+              1
+            )
+          )
+          (keyed_index (slot b (tile b tile_b)) (slot h (elem n)) (slot k fulltile) (slot q fulltile))
+        )
+      )
+    )
+  )
+)

@@ -2,10 +2,11 @@
 //!
 //! The first pass records ordered accesses and their exact lexical scopes. Tensor
 //! sets are summaries of those records, not storage or initialization decisions.
-//! [`analyze`] accepts a syntax tree; [`analyze_text`] is the compatibility entry
-//! point for the existing evaluation corpus. Neither pass changes the schedule.
+//! [`analyze`] accepts a syntax tree; [`analyze_text`] parses an IR source file.
+//! Neither pass changes the schedule.
 
 mod collect;
+pub(crate) mod dependencies;
 mod ir;
 mod model;
 

@@ -103,6 +103,7 @@ impl Collector {
                 Ok(Self::only_dummy(&children[0])? && Self::only_dummy(&children[1])?)
             }
             "sloop" | "ploop" => Self::only_dummy(&args(node, 5)?[4]),
+            "mloop" => Self::only_dummy(&args(node, 7)?[6]),
             _ => Ok(false),
         }
     }
@@ -116,6 +117,7 @@ impl Collector {
                 }
                 Ok(())
             }
+            "mloop" => self.mloop(node, scope),
             "ploop" | "sloop" => {
                 let children = args(node, 5)?;
                 let variable = symbol(&children[3])?.to_owned();
@@ -150,8 +152,96 @@ impl Collector {
                 Ok(())
             }
             "store" => self.store(node, scope),
-            _ => Err(invalid(node, "expected seq, ploop, sloop, store or dummy")),
+            _ => Err(invalid(
+                node,
+                "expected seq, ploop, sloop, mloop, store or dummy",
+            )),
         }
+    }
+
+    fn mloop(&mut self, node: &IrNode, parent: ScopeId) -> Result<(), AnalysisError> {
+        let c = args(node, 7)?;
+        let start = self.index_expr(&c[0]);
+        let stop = self.index_expr(&c[1]);
+        let step = self.index_expr(&c[2]);
+        let count = self.index_expr(&c[5]);
+        let serial_name = symbol(&c[3])?.to_owned();
+        let split_name = symbol(&c[4])?.to_owned();
+        if serial_name == split_name {
+            return Err(invalid(node, "mloop bindings must have distinct names"));
+        }
+        let split = ScopeId(self.scopes.len());
+        let serial = ScopeId(split.0 + 1);
+        let apply = |op: &str, a, b| IndexExpr::Apply(op.into(), vec![a, b]);
+        let chunk = apply("//", apply("-", stop, start.clone()), count.clone());
+        let inner_start = apply(
+            "+",
+            start.clone(),
+            apply("*", IndexExpr::LoopVar(split), chunk.clone()),
+        );
+        let inner_end = apply(
+            "+",
+            start,
+            apply(
+                "*",
+                apply("+", IndexExpr::LoopVar(split), IndexExpr::Integer(1)),
+                chunk,
+            ),
+        );
+        // The original atomic mloop stays in ProgramAnalysis.ir. Two lexical
+        // scopes give its two bindings distinct IDs without inventing a schedule.
+        for (id, parent, kind, info) in [
+            (
+                split,
+                parent,
+                ScopeKind::SplitLoop,
+                LoopInfo {
+                    variable: split_name.clone(),
+                    start: IndexExpr::Integer(0),
+                    end: count,
+                    step: IndexExpr::Integer(1),
+                },
+            ),
+            (
+                serial,
+                split,
+                ScopeKind::SequentialLoop,
+                LoopInfo {
+                    variable: serial_name.clone(),
+                    start: inner_start,
+                    end: inner_end,
+                    step,
+                },
+            ),
+        ] {
+            self.scopes.push(ScopeInfo {
+                kernel: self.scopes[parent.0].kernel,
+                parent: Some(parent),
+                kind,
+                loop_info: Some(info),
+                source_span: node.span(),
+                children: Vec::new(),
+                accesses: Vec::new(),
+                read_writes: ReadWrites::default(),
+            });
+            self.scopes[parent.0].children.push(ScopeItem::Scope(id));
+        }
+        self.bindings.push((split_name, split));
+        self.bindings.push((serial_name, serial));
+        self.statement(&c[6], serial)?;
+        self.bindings.truncate(self.bindings.len() - 2);
+        Ok(())
+    }
+
+    fn view_axes(base: &IrNode) -> Option<Vec<String>> {
+        (base.head() == "view").then(|| {
+            base.args().unwrap()[1]
+                .args()
+                .unwrap()
+                .iter()
+                .map(|axis| axis.args().unwrap()[0].head().to_owned())
+                .collect()
+        })
     }
 
     fn tensor_group(node: &IrNode) -> Result<(TensorKind, Vec<String>), AnalysisError> {
@@ -222,6 +312,7 @@ impl Collector {
                 scope,
                 index: index.clone(),
                 view_shape: view_shape.clone(),
+                view_axes: Self::view_axes(&children[0]),
                 source_span: node.span(),
             });
         }
@@ -261,13 +352,14 @@ impl Collector {
                 scope: self.statements[statement.0].scope,
                 index,
                 view_shape,
+                view_axes: Self::view_axes(&children[0]),
                 source_span: node.span(),
             });
             Ok(ValueExpr::Load(access))
         } else {
             if matches!(
                 node.head(),
-                "store" | "seq" | "ploop" | "sloop" | "input" | "output" | "tensor"
+                "store" | "seq" | "ploop" | "sloop" | "mloop" | "input" | "output" | "tensor"
             ) {
                 return Err(invalid(
                     node,

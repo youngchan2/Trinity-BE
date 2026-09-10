@@ -1,50 +1,55 @@
 # trinity-lowering
 
-`trinity-lowering` provides concrete implementation candidates and validated
-physical tensor program graphs.
+Rust analysis and Triton source generation for extracted, scheduled Trinity IR.
+The emitter preserves the IR's computation graph and loop schedule. Named views,
+keyed indices, split loops, and expression-valued loop bounds are lowered into
+Triton kernels and a Python `forward(...)` launch wrapper.
 
-The `analyzer` module also collects ordered tensor accesses and lexical loop
-scopes from extracted Trinity programs. It retains the original syntax together
-with the analysis result for subsequent passes. See
-[Inductor architecture notes and implementation scope](docs/INDUCTOR_ANALYSIS.md).
+## Source layout
 
-```shell
-cargo run --example analyze_ir -- tests/fixtures/analyzer/ffn_cases.txt
+```text
+src/analysis/          IR parsing, tensor accesses, lexical scopes, dependencies
+src/triton/plan.rs     ProgramPlan and per-kernel lowering results
+src/triton/shape.rs    Access shapes and index expressions
+src/triton/lowering/  Storage, initialization, loop/grid and parameter planning
+src/triton/codegen/   Kernel bodies, addresses, autotuning and launch wrappers
+tests/batched_mla_emit.rs
+                      Stage 14/16/20 file emission and Python syntax checks
+tests/fixtures/batched_mla/
+                      Supplied postprocessed IR files and input shapes
 ```
 
-The example accepts either one S-expression or a numbered evaluation list. It
-reports incomplete `dummydata` entries as errors. This first pass collects facts.
-The `triton` module resolves concrete shapes and symbols into an immutable plan
-for per-access register/global bindings, initialization and store placement.
-The emitter follows `Trinity/backend/codegen`: tensor names, pointer/stride
-arguments, `BLOCK_*`, autotune, `TENSOR_PARAMS`, `BLOCK_PARAMS`, and the named
-`forward(...)` interface. The caller supplies all global fp16 tensors; local
-arithmetic and accumulators use fp32. The original loop schedule is preserved.
+The separate CUDA implementation and physical-plan APIs remain in
+`src/implementation/` and `src/physical/`, with their unit tests under `src/tests`.
+They are independent of the current Triton emitter.
 
-See [the Triton fallback interface, limitations and validation](docs/TRITON_FALLBACK.md).
+## Rust API
 
-```shell
-cargo run --example emit_triton -- program.ir shapes.txt generated.py tile_k=64 tile_n=128 tile_p=64
-```
+For Rust callers, use `triton::compile(text, options)` or
+`analysis::analyze_text(text)` followed by `triton::lower(analysis, options)` and
+`ProgramPlan::emit()`.
 
-Regenerated Llama/Falcon FFN and vanilla sources are in `generated_kernels/`
-(generated artifacts, ignored by Git). Original Python-backend reference outputs
-for regression comparison are in `tests/fixtures/triton_reference/`.
-
-## Getting Started
+## Emission tests
 
 ```shell
-git clone --recursive https://github.com/kaist-ina/trinity-lowering.git
+cargo test --locked --test batched_mla_emit -- --nocapture
 ```
 
-## Contribution
+The three tests read the checked-in stage 14/16/20 `.txt` fixtures and write
+`stage14.py`, `stage16.py`, and `stage20.py` to `target/tests/batched_mla/`.
+They check Python syntax, the expected kernel count, and the launch wrapper.
+Python 3 is required; PyTorch, Triton, and a GPU are not used by these tests.
+These are source-generation checks, not numerical or performance tests.
+
+`generated_kernels/` and `reference_kernels/` are ignored artifacts and are not
+changed by the tests.
+
+## Development checks
 
 ```shell
-# Install the Git hook and check all tracked files.
-pre-commit install
-pre-commit run --all-files
-
-# Format changes and run the Rust checks directly.
-cargo fmt -p trinity-lowering
-cargo clippy -p trinity-lowering --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 ```
+
+The repository also provides pre-commit hooks in `.pre-commit-config.yaml`.
