@@ -1,4 +1,5 @@
 //! Fixtures built exclusively through the public physical-plan API.
+pub mod loop_ir;
 pub mod tensor;
 use trinity_lowering::*;
 
@@ -92,7 +93,7 @@ impl Builder {
                 [values[out]],
                 payload,
             );
-            b.add_action([op]);
+            b.add_statement(trinity_lowering::Statement::Operation(op));
         }
         b.finalize("result", values[output]).unwrap()
     }
@@ -164,4 +165,34 @@ pub fn lhs_gather(backend: &str, axis: usize, world: usize) -> PhysicalPlan {
     let gathered = b.gather(x, shape, axis, world, backend);
     let y = b.gemm(gathered, w, full[0], 256, full[1]);
     b.finish(y)
+}
+
+// Inspect work produced by the common scheduler, including normalized builder input.
+pub struct OperationWork {
+    pub work: Vec<Vec<trinity_lowering::emit::Work>>,
+}
+pub fn operation_work(
+    plan: &trinity_lowering::PhysicalPlan,
+    operation: trinity_lowering::OperationId,
+) -> OperationWork {
+    let source = trinity_lowering::emit(plan).unwrap();
+    let execution = source.execution();
+    OperationWork {
+        work: (0..plan.world_size())
+            .map(|rank| {
+                execution
+                    .tasks
+                    .iter()
+                    .zip(&execution.work)
+                    .filter(|(t, _)| {
+                        t.rank == rank
+                            && plan.statements()[t.statement]
+                                .operations()
+                                .contains(&operation)
+                    })
+                    .map(|(_, w)| w.clone())
+                    .collect()
+            })
+            .collect(),
+    }
 }

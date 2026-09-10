@@ -29,7 +29,7 @@ fn gemm_plan(gather_weight: bool) -> PhysicalPlan {
                 instance,
             )),
         );
-        builder.add_action([operation]);
+        builder.add_statement(trinity_lowering::Statement::Operation(operation));
         gathered
     } else {
         w
@@ -44,7 +44,7 @@ fn gemm_plan(gather_weight: bool) -> PhysicalPlan {
         [y],
         OperationPayload::Compute(ComputeOperation::new(instance)),
     );
-    builder.add_action([operation]);
+    builder.add_statement(trinity_lowering::Statement::Operation(operation));
     builder.finalize("Y", y).unwrap()
 }
 
@@ -53,13 +53,14 @@ fn builds_a_single_gpu_gemm_through_the_public_api() {
     let plan = gemm_plan(false);
     assert_eq!(plan.world_size(), 1);
     assert_eq!(plan.operations().len(), 1);
-    assert_eq!(plan.actions().len(), 1);
+    assert_eq!(plan.statements().len(), 1);
     assert_eq!(plan.inputs()[0].tensor(), "W");
     assert_eq!(plan.inputs()[1].tensor(), "X");
     assert_eq!(plan.output().tensor(), "Y");
-    let (_, action) = plan.actions().next().unwrap();
-    assert_eq!(action.inputs().len(), 2);
-    assert_eq!(action.outputs(), &[plan.output().value()]);
+    let statement = &plan.statements()[0];
+    let statement = plan.operation(statement.operations()[0]).unwrap();
+    assert_eq!(statement.inputs().len(), 2);
+    assert_eq!(statement.outputs(), &[plan.output().value()]);
     assert!(plan.same_body(&gemm_plan(false)));
 }
 
@@ -68,10 +69,11 @@ fn builds_all_gather_and_gemm_through_the_same_public_api() {
     let plan = gemm_plan(true);
     assert_eq!(plan.world_size(), 2);
     assert_eq!(plan.operations().len(), 2);
-    let mut actions = plan.actions();
-    let (_, gather) = actions.next().unwrap();
-    let (_, gemm) = actions.next().unwrap();
-    assert!(actions.next().is_none());
+    let [gather, gemm] = plan.statements() else {
+        panic!("expected gather and GEMM statements in program order");
+    };
+    let gather = plan.operation(gather.operations()[0]).unwrap();
+    let gemm = plan.operation(gemm.operations()[0]).unwrap();
     let gathered = gather.outputs()[0];
     assert!(gemm.inputs().contains(&gathered));
     assert_eq!(gemm.outputs(), &[plan.output().value()]);

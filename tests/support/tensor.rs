@@ -34,7 +34,8 @@ impl Builder {
             [output],
             OperationPayload::Compute(ComputeOperation::new(implementation)),
         );
-        self.plan.add_action([op]);
+        self.plan
+            .add_statement(trinity_lowering::Statement::Operation(op));
     }
     pub fn pointwise(
         &mut self,
@@ -162,7 +163,8 @@ pub fn gather_normalization(world: usize) -> PhysicalPlan {
             imp,
         )),
     );
-    b.plan.add_action([op]);
+    b.plan
+        .add_statement(trinity_lowering::Statement::Operation(op));
     let square = b.pointwise("square", &[gathered], DType::Fp32, None, Storage::Global);
     let sum = b.reduce(square, Storage::External);
     b.finish(sum)

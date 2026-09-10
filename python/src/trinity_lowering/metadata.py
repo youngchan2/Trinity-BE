@@ -70,12 +70,12 @@ def requirements(data):
             }
         )
 
-        if b.value != index or b.dtype not in ("bf16", "fp32") or len(b.shape) not in (1, 2):
+        if b.value != index or b.dtype not in ("bf16", "fp32") or len(b.shape) not in (1, 2, 3):
             raise ValueError("invalid canonical binding/dtype/shape")
         for extent in b.shape:
             _positive(extent, "shape extent")
         _positive(b.alignment, "alignment")
-        strides = (1,) if len(b.shape) == 1 else (b.shape[1], 1)
+        strides = tuple(math.prod(b.shape[i + 1 :]) for i in range(len(b.shape)))
         width = 2 if b.dtype == "bf16" else 4
         if b.alignment < width or b.alignment & (b.alignment - 1) or b.strides != strides:
             raise ValueError("invalid alignment/strides")

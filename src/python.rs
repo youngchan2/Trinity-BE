@@ -426,7 +426,7 @@ impl PhysicalPlanBuilder {
         Ok(self.operations.len() - 1)
     }
 
-    fn add_action(&mut self, operations: Vec<usize>) -> PyResult<()> {
+    fn add_statement(&mut self, operations: Vec<usize>) -> PyResult<()> {
         let ids = operations
             .iter()
             .map(|i| {
@@ -437,7 +437,14 @@ impl PhysicalPlanBuilder {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        self.open()?.add_action(ids);
+        if ids.len() != 1 {
+            return Err(bad(
+                "Python builder add_statement accepts exactly one operation ID",
+            ));
+        }
+
+        self.open()?.add_statement(tl::Statement::Operation(ids[0]));
+
         Ok(())
     }
 
@@ -467,6 +474,29 @@ impl PhysicalPlanBuilder {
 #[pyclass(frozen, module = "trinity_lowering._compiler")]
 struct PhysicalPlan(tl::PhysicalPlan);
 
+#[pyfunction]
+#[pyo3(signature=(text, symbols, dtypes, target_name="hopper", world_size=1))]
+fn lower_loop_ir(
+    text: &str,
+    symbols: std::collections::BTreeMap<String, i64>,
+    dtypes: std::collections::BTreeMap<String, String>,
+    target_name: &str,
+    world_size: usize,
+) -> PyResult<Vec<PhysicalPlan>> {
+    let config = tl::LoopIrConfig {
+        target: target(target_name)?,
+        world_size,
+        symbols,
+        dtypes: dtypes
+            .into_iter()
+            .map(|(n, d)| Ok((n, dtype(&d)?)))
+            .collect::<PyResult<_>>()?,
+    };
+    tl::lower_loop_ir(text, &config)
+        .map(|plans| plans.into_iter().map(PhysicalPlan).collect())
+        .map_err(bad)
+}
+
 #[pymethods]
 impl PhysicalPlan {
     #[getter]
@@ -481,7 +511,7 @@ impl PhysicalPlan {
             "output":{"name":self.0.output().tensor(),"value":self.0.output().value().index()},
             "values":self.0.value_instances().map(|(id,v)|serde_json::json!({"value":id.index(),"dtype":v.dtype(),"shape":v.shape(),"storage":format!("{:?}",v.storage()).to_lowercase()})).collect::<Vec<_>>(),
             "operations":self.0.operations().map(|(id,o)|serde_json::json!({"id":id.index(),"inputs":o.inputs().iter().map(|v|v.index()).collect::<Vec<_>>(),"outputs":o.outputs().iter().map(|v|v.index()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-            "actions":self.0.actions().map(|(id,a)|serde_json::json!({"id":id.index(),"operations":a.operations().iter().map(|o|o.index()).collect::<Vec<_>>()})).collect::<Vec<_>>()
+            "statements":self.0.statements().iter().map(|s|serde_json::json!({"operations":s.operations().iter().map(|o|o.index()).collect::<Vec<_>>()})).collect::<Vec<_>>()
         }).to_string()
     }
 }
@@ -641,6 +671,7 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reduce_sum_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(broadcast_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(emit, m)?)?;
+    m.add_function(wrap_pyfunction!(lower_loop_ir, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
 
     Ok(())

@@ -5,22 +5,31 @@
 //! are visible. Push writes each rank's own contribution to every destination;
 //! pull reads each requested region from its owning peer. Runtime allocation,
 //! readiness signals, fences and completion protocols belong to execution
-//! concretization, not the physical Action graph.
+//! concretization, not the physical Statement graph.
 //!
 //! A fused push accepts BF16 Shared or Register output tiles. A fused pull
 //! stages the requested operand panels in Shared memory; its remote source
 //! always remains External/Global. Register push also rounds FP32 accumulators
 //! to BF16 before sending, preserving the unfused value's dtype boundary.
 
-use super::super::{
+use super::GatherContext;
+use crate::emit::cuda::{
+    CudaImplementation, CudaPhaseTemplate, EmitError, OperationSchedule, Region, Work,
+    render_template,
+};
+use crate::implementation::{
     AllGatherImplementation, AttributeSet, ImplementationDefinition, ImplementationId,
     ImplementationInstance,
 };
+use crate::physical::normalize::*;
 use crate::{CommunicationKind, DType, Operation, OperationPayload, PhysicalPlan};
+use crate::{LoopKind, OperationId};
 
-pub(super) const TRANSFER_TILE: usize = 64;
-pub(super) const PEER_PUSH_ID: ImplementationId = ImplementationId::new("nvshmem.peer_push");
-pub(super) const PEER_PULL_ID: ImplementationId = ImplementationId::new("nvshmem.peer_pull");
+const TRANSFER_TILE: usize = 64;
+pub(in crate::implementation::cuda) const PEER_PUSH_ID: ImplementationId =
+    ImplementationId::new("nvshmem.peer_push");
+pub(in crate::implementation::cuda) const PEER_PULL_ID: ImplementationId =
+    ImplementationId::new("nvshmem.peer_pull");
 
 pub(super) static PEER_PUSH: PeerAllGather = PeerAllGather(PEER_PUSH_ID);
 pub(super) static PEER_PULL: PeerAllGather = PeerAllGather(PEER_PULL_ID);
@@ -60,7 +69,7 @@ impl AllGatherImplementation for PeerAllGather {
 }
 
 /// The same coordinate contract is used to validate both peer definitions.
-pub(super) struct PeerGeometry {
+struct PeerGeometry {
     source: [usize; 2],
     target: [usize; 2],
     axis: usize,
@@ -68,7 +77,7 @@ pub(super) struct PeerGeometry {
 }
 
 impl PeerGeometry {
-    pub(super) fn new(
+    pub(in crate::implementation::cuda) fn new(
         dtype: DType,
         shapes: [&[usize]; 2],
         axis: usize,
@@ -101,7 +110,11 @@ impl PeerGeometry {
         })
     }
 
-    pub(super) fn push_destination(&self, rank: usize, local: [usize; 2]) -> Option<[usize; 2]> {
+    pub(in crate::implementation::cuda) fn push_destination(
+        &self,
+        rank: usize,
+        local: [usize; 2],
+    ) -> Option<[usize; 2]> {
         if rank >= self.world_size || (0..2).any(|axis| local[axis] >= self.source[axis]) {
             return None;
         }
@@ -110,7 +123,10 @@ impl PeerGeometry {
         Some(global)
     }
 
-    pub(super) fn pull_source(&self, global: [usize; 2]) -> Option<(usize, [usize; 2])> {
+    pub(in crate::implementation::cuda) fn pull_source(
+        &self,
+        global: [usize; 2],
+    ) -> Option<(usize, [usize; 2])> {
         if (0..2).any(|axis| global[axis] >= self.target[axis]) {
             return None;
         }
@@ -121,7 +137,7 @@ impl PeerGeometry {
     }
 }
 
-pub(super) fn supports_operation(
+pub(in crate::implementation::cuda) fn supports_operation(
     plan: &PhysicalPlan,
     operation: &Operation,
     id: ImplementationId,
@@ -154,6 +170,132 @@ pub(super) fn supports_operation(
             plan.world_size(),
         )
         .is_some()
+}
+
+impl PeerAllGather {
+    fn context(&self, plan: &PhysicalPlan, id: OperationId) -> Result<GatherContext, EmitError> {
+        let op = plan.operation(id).unwrap();
+        if !supports_operation(plan, op, self.id()) {
+            return Err(unsupported("peer AllGather contract"));
+        }
+        let OperationPayload::Communication(c) = op.payload() else {
+            unreachable!()
+        };
+        let input = op.inputs()[0];
+        let output = op.outputs()[0];
+        let source = plan.value_instance(input).unwrap().shape();
+        let target = plan.value_instance(output).unwrap().shape();
+        Ok(GatherContext {
+            input: crate::emit::cuda::binding_slot(plan, input)?,
+            output: crate::emit::cuda::binding_slot(plan, output)?,
+            source_rows: source[0],
+            source_cols: source[1],
+            target_rows: target[0],
+            target_cols: target[1],
+            axis: c.implementation().attributes().get("shard_axis").unwrap(),
+            push: self.id() == PEER_PUSH_ID,
+            chunk: TRANSFER_TILE,
+        })
+    }
+}
+impl CudaImplementation for PeerAllGather {
+    fn schedule(
+        &self,
+        plan: &PhysicalPlan,
+        id: OperationId,
+    ) -> Result<OperationSchedule, EmitError> {
+        let c = self.context(plan, id)?;
+        let shape = if c.push {
+            [c.source_rows, c.source_cols]
+        } else {
+            [c.target_rows, c.target_cols]
+        };
+        Ok(OperationSchedule {
+            dimensions: vec![
+                dimension("row", shape[0], c.chunk, LoopKind::Parallel),
+                dimension("col", shape[1], c.chunk, LoopKind::Parallel),
+            ],
+            coordinates: vec![variable("row"), variable("col")],
+            ..Default::default()
+        })
+    }
+    fn phases(&self, plan: &PhysicalPlan, id: OperationId) -> Result<CudaPhaseTemplate, EmitError> {
+        let c = self.context(plan, id)?;
+        let op = plan.operation(id).unwrap();
+        let text = render_template(include_str!("peer.cu.j2"), &c)?;
+        let mut body = CudaPhaseTemplate::cuda(
+            &text,
+            false,
+            &["Element", "src", "dst", "row", "col", "peer", "i"],
+        )?;
+        for (name, value, output) in [
+            ("src", op.inputs()[0], false),
+            ("dst", op.outputs()[0], true),
+        ] {
+            let tensor = plan.value_instance(value).unwrap();
+            let binding = crate::emit::Binding {
+                symbol: body.symbol(name)?,
+                value,
+                dtype: tensor.dtype(),
+                storage: tensor.storage(),
+            };
+            if output {
+                body.epilogue.outputs.push(binding);
+            } else {
+                body.epilogue.inputs.push(binding);
+            }
+        }
+        body.epilogue.resources.symmetric_values = if c.push {
+            vec![op.outputs()[0]]
+        } else {
+            vec![op.inputs()[0]]
+        };
+        Ok(body)
+    }
+    fn work(
+        &self,
+        plan: &PhysicalPlan,
+        id: OperationId,
+        rank: usize,
+        coordinate: [usize; 3],
+    ) -> Result<Option<Work>, EmitError> {
+        let c = self.context(plan, id)?;
+        let op = plan.operation(id).unwrap();
+        let input = op.inputs()[0];
+        let output = op.outputs()[0];
+        let source = [c.source_rows, c.source_cols];
+        let target = [c.target_rows, c.target_cols];
+        let geometry =
+            PeerGeometry::new(DType::Bf16, [&source, &target], c.axis, plan.world_size()).unwrap();
+        let [row, col, _] = coordinate;
+        let (reads, writes, coordinate) = if c.push {
+            let origin = geometry
+                .push_destination(rank, [row, col])
+                .ok_or_else(|| unsupported("peer push coordinate"))?;
+            (
+                vec![Region::new(input, rank, [row, col], [64, 64])],
+                (0..plan.world_size())
+                    .map(|peer| Region::new(output, peer, origin, [64, 64]))
+                    .collect(),
+                [row, col, rank],
+            )
+        } else {
+            let (peer, origin) = geometry
+                .pull_source([row, col])
+                .ok_or_else(|| unsupported("peer pull coordinate"))?;
+            (
+                vec![Region::new(input, peer, origin, [64, 64])],
+                vec![Region::new(output, rank, [row, col], [64, 64])],
+                [row, col, peer],
+            )
+        };
+        Ok(Some(Work {
+            coordinate,
+            reads,
+            writes,
+            ..Default::default()
+        }))
+    }
 }
 
 #[cfg(test)]

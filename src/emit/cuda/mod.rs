@@ -5,10 +5,15 @@
 //! runtimes have separate templates and launch ABIs; CTA operations are shared
 //! through binding, tile-coordinate, and input-readiness hooks.
 
+mod access;
 mod backend;
 mod error;
 mod graph;
+mod indexing;
+mod loop_body;
 mod persistent;
+mod phase;
+mod program;
 mod render;
 mod requirements;
 mod source;
@@ -22,10 +27,14 @@ use serde::Serialize;
 use crate::platform::{CudaTargetCapability, TargetCapability};
 use crate::{PhysicalPlan, Storage};
 
-pub use backend::{CudaImplementation, OperationEmission, Region, Work};
+pub use backend::{
+    AccumulationBody, AccumulationScope, AccumulationTile, CudaImplementation, CudaPhaseTemplate,
+    OperationSchedule, Region, Work,
+};
 pub use error::EmitError;
+pub use phase::{Binding, Body, Code, Phase, Resources, Symbol, SymbolId};
+
 pub use graph::{Dependency, Execution, Stage, Task};
-pub(crate) use graph::{full_region, region_shape};
 pub use requirements::{BufferBindingRequirement, CudaRequirements};
 pub use source::CudaSource;
 
@@ -39,43 +48,46 @@ pub fn render_template<T: Serialize>(source: &str, context: &T) -> Result<String
     Ok(environment.render_str(source, context)?)
 }
 
+/// Generates CUDA source and launch requirements from a physical plan.
+///
+/// Collects buffer bindings, builds execution metadata and CTA bodies, and
+/// renders the program into a [`CudaSource`].
+///
+/// # Errors
+///
+/// Returns an [`EmitError`] for unsupported shapes or resource requirements,
+/// invalid backend contracts, or failures while building or rendering the program.
 pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
     let mut buffers = Vec::new();
 
     // Collect buffer allocation and binding requirements for the plan's value instances.
     for (id, value) in plan.value_instances() {
-        if matches!(value.storage(), Storage::Shared | Storage::Register) {
-            return Err(EmitError::Unsupported(format!(
-                "value {} dtype/storage",
-                id.index()
-            )));
+        let shape = value.shape().to_vec();
+
+        // Region stores origins and extents in three axes,
+        // padding unused axes with extent one.
+        if !(1..=3).contains(&shape.len()) {
+            return Err(EmitError::Unsupported("supported ranks are 1, 2, 3".into()));
         }
 
-        let shape = value.shape().to_vec();
-        let extent = region_shape(&shape)?;
+        let elements: usize = shape.iter().product();
 
         // Disallow empty matrices.
         if shape.contains(&0) {
             return Err(EmitError::Unsupported("empty matrix".into()));
         }
 
-        // CuTe's statically specialized global layouts use 32-bit indices.
-        // Reject oversized spans before constructing work or generating CUDA.
-        if extent[0] > i32::MAX as usize / extent[1] {
-            return Err(EmitError::Unsupported(
-                "matrix exceeds 32-bit CuTe indexing".into(),
-            ));
+        if matches!(value.storage(), Storage::Shared | Storage::Register) {
+            continue;
         }
 
         buffers.push(BufferBindingRequirement {
             dtype: value.dtype(),
-            strides: if shape.len() == 1 {
-                vec![1]
-            } else {
-                vec![shape[1], 1]
-            },
-            value: id.index(),
-            bytes: extent[0] * extent[1] * value.dtype().size_bytes(),
+            strides: (0..shape.len())
+                .map(|i| shape[i + 1..].iter().product())
+                .collect(),
+            value: buffers.len(),
+            bytes: elements * value.dtype().size_bytes(),
             shape,
             alignment: 16,
             external: value.storage() == Storage::External,
@@ -92,47 +104,26 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
 
     // flags
     let nvshmem = plan.world_size() > 1;
-    let mut nvls = false;
+    let program::ProgramEmission {
+        execution,
+        bodies,
+        resources,
+        phases,
+    } = program::build(plan)?;
 
-    let mut shared_memory_bytes = 0;
-    let mut operations = Vec::new();
-    let mut bodies = Vec::new();
-
-    // Generate each action's CUDA body, per-rank work, and resource requirements.
-    for (action_id, action) in plan.actions() {
-        if action.operations().len() != 1 {
-            return Err(EmitError::Unsupported("non-singleton Action".into()));
-        }
-        let op_id = action.operations()[0];
-        let op = plan.operation(action.operations()[0]).unwrap();
-
-        let instance = match op.payload() {
-            crate::OperationPayload::Compute(op) => op.implementation(),
-            crate::OperationPayload::Communication(op) => op.implementation(),
-        };
-
-        let backend = instance.definition().cuda().ok_or_else(|| {
-            EmitError::Unsupported(format!(
-                "implementation {} has no CUDA backend",
-                instance.id().as_str()
-            ))
-        })?;
-        let result = backend.specialize(plan, op_id)?;
-
-        bodies.push(result.body.clone());
-
-        shared_memory_bytes = shared_memory_bytes.max(result.shared_memory_bytes);
-        nvls |= result.nvls;
-
-        for value in &result.symmetric_values {
-            buffers[value.index()].symmetric = true;
-        }
-
-        operations.push((action_id, op_id, result));
+    let shared_memory_bytes = resources.shared_memory_bytes;
+    // CUTLASS sm90_common.inl: sm90_smem_capacity_bytes. Leave one aligned
+    // block for the persistent wrapper's static control variables.
+    if shared_memory_bytes > 232_448 - 128 {
+        return Err(EmitError::Unsupported(
+            "body exceeds Hopper CTA shared-memory capacity".into(),
+        ));
     }
 
-    // Build execution tasks and dependencies from the operations' read/write regions.
-    let execution = graph::build(plan, &operations)?;
+    let nvls = resources.nvls;
+    for value in resources.symmetric_values {
+        buffers[binding_slot(plan, value)?].symmetric = true;
+    }
 
     let minimum_workers = if plan.world_size() > 1
         && execution.tasks.iter().any(|t| {
@@ -147,6 +138,7 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
     };
 
     let TargetCapability::Cuda(target) = plan.target();
+
     let requirements = CudaRequirements {
         target,
         cuda_arch: match target {
@@ -175,5 +167,17 @@ pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
         code,
         requirements,
         execution,
+        bodies: phases,
     })
+}
+
+/// Dense external/global launch slots; local values never require allocations.
+pub(crate) fn binding_slot(
+    plan: &PhysicalPlan,
+    value: crate::ValueInstanceId,
+) -> Result<usize, EmitError> {
+    plan.value_instances()
+        .filter(|(_, v)| matches!(v.storage(), Storage::External | Storage::Global))
+        .position(|(id, _)| id == value)
+        .ok_or_else(|| EmitError::Contract("local value has no launch binding".into()))
 }

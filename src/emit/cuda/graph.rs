@@ -1,45 +1,56 @@
 //! CUDA tasks and dependencies derived from a [`PhysicalPlan`].
 //!
-//! Each singleton [`Action`](crate::Action) expands into tile or chunk tasks
-//! (`WorkItem`s in the architecture). Streamed execution launches them as blocks
-//! in stream order; persistent execution schedules them on interchangeable Worker
-//! CTAs using readiness tokens. This metadata belongs to emission.
+//! Lowering derives CTA bodies and coordinate-specific tasks from the ordered
+//! [`Statement`](crate::Statement) program. A body may contain several statements,
+//! and a loop statement may produce multiple bodies and tasks. Streamed execution
+//! launches tasks as blocks in stream order; persistent execution schedules them
+//! on interchangeable Worker CTAs using readiness tokens. This metadata belongs
+//! to emission.
 
 use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::{EmitError, OperationEmission, Region};
-use crate::{ActionId, OperationId, PhysicalPlan, ValueInstanceId};
+use super::access::{Effects, fail};
+use super::{EmitError, Region, Work};
+use crate::{PhysicalPlan, ValueInstanceId};
 
 /// Execution metadata for all ranks of one physical plan.
 #[derive(Debug, Clone)]
 pub struct Execution {
+    /// Access metadata, in the same rank-major order as tasks.
+    pub work: Vec<Work>,
     /// Rank-major tasks, indexed by `rank * tasks_per_rank + slot`.
     pub tasks: Vec<Task>,
     /// Task count per rank, equal across ranks.
     pub tasks_per_rank: usize,
     /// Per-rank final-output producer tokens checked at persistent kernel exit.
     pub output_dependencies: Vec<Vec<Dependency>>,
-    /// Operation task ranges in topological order, shared across ranks.
+    /// Task-set ranges in execution order, shared across ranks.
     pub launches: Vec<Launch>,
 }
 
-/// One operation's contiguous range of rank-local task slots.
+/// One task set's contiguous range of rank-local task slots.
 ///
 /// Streamed execution uses one kernel with [`count`](Self::count) blocks;
 /// persistent execution dispatches these tasks to its Worker grid.
 #[derive(Debug, Clone, Serialize)]
 pub struct Launch {
-    /// Canonical operation index in the physical plan.
-    pub operation: usize,
+    /// Top-level Statement provenance; nested parallel sets can share it.
+    pub statement: usize,
+    /// Leaf task family beneath the parallel-loop collection, independent of body specialization.
+    pub task_set: usize,
+    /// Bodies specialized for tasks in this set (for example, clipped tails).
+    pub bodies: Vec<usize>,
+    /// Generated device body ID.
+    pub body: usize,
     /// First rank-local task slot.
     pub begin: usize,
     /// Task count in the range, equal across ranks.
     pub count: usize,
 }
 
-/// One CTA's execution of an operation at a tile or chunk coordinate.
+/// One CTA's invocation of a generated body at bound loop coordinates.
 ///
 /// A GEMM task owns its output tile across all K stages through the final store.
 #[derive(Debug, Clone, Serialize)]
@@ -47,10 +58,17 @@ pub struct Task {
     pub rank: usize,
     /// Rank-local ID indexing the task's completion token and scheduler state.
     pub slot: usize,
-    /// Canonical index of the owning Action.
-    pub action: usize,
-    /// Canonical operation index selecting the generated device body.
-    pub operation: usize,
+    /// Position in the plan's top-level Statement list, for provenance.
+    /// Execution dispatch uses `body` and `arguments`.
+    pub statement: usize,
+    /// Leaf task family beneath the parallel-loop collection, independent of body specialization.
+    pub task_set: usize,
+    /// Device body dispatch ID; a body may contain several operations.
+    pub body: usize,
+    /// Bound lexical parallel-loop coordinates for this invocation.
+    pub arguments: std::collections::BTreeMap<String, i64>,
+    /// Index in this body's argument table, independent of task slot and tile geometry.
+    pub argument: usize,
     /// Backend coordinates: WGMMA tile indices, or communication element/chunk
     /// offsets and an optional source rank.
     pub coordinate: [usize; 3],
@@ -145,170 +163,236 @@ impl Execution {
     }
 }
 
-/// A produced region and its readiness token, which may reside on different ranks.
 #[derive(Clone, Copy)]
-struct Producer {
+struct AccessToken {
     region: Region,
     token: Dependency,
 }
 
-/// Resolve backend regions into task, stage and output dependencies.
-///
-/// # Errors
-///
-/// Returns [`EmitError::Contract`] for invalid regions, coverage or cycles.
-pub(super) fn build(
-    plan: &PhysicalPlan,
-    operations: &[(ActionId, OperationId, OperationEmission)],
-) -> Result<Execution, EmitError> {
-    // Total task count per rank.
-    let count: usize = operations.iter().map(|(_, _, e)| e.work[0].len()).sum();
-
-    let mut producers =
-        vec![vec![Vec::<Producer>::new(); plan.value_instances().len()]; plan.world_size()];
-
-    for rank in 0..plan.world_size() {
-        // Add producers for this rank's PhysicalPlan inputs.
-        for binding in plan.inputs() {
-            if !producers[rank][binding.value().index()].is_empty() {
-                continue; // Input aliases share a producer and readiness token.
-            }
-
-            let value = plan.value_instance(binding.value()).unwrap();
-
-            producers[rank][binding.value().index()].push(Producer {
-                // Full input region on this rank.
-                region: Region::new(binding.value(), rank, [0, 0], region_shape(value.shape())?),
-                // Shared input-readiness token, after the task slots.
-                token: Dependency { rank, slot: count },
-            });
+pub(super) fn overlaps(a: Region, b: Region) -> bool {
+    a.value == b.value
+        && a.rank == b.rank
+        && (0..3).all(|i| {
+            a.origin[i] < b.origin[i] + b.extent[i] && b.origin[i] < a.origin[i] + a.extent[i]
+        })
+}
+/// Exact rectangular subtraction; disjoint pieces retain the previous version.
+fn subtract(region: Region, cut: Region) -> Vec<Region> {
+    if !overlaps(region, cut) {
+        return vec![region];
+    }
+    let mut core = region;
+    let mut pieces = Vec::new();
+    for i in 0..3 {
+        let lo = core.origin[i].max(cut.origin[i]);
+        let hi = (core.origin[i] + core.extent[i]).min(cut.origin[i] + cut.extent[i]);
+        if core.origin[i] < lo {
+            let mut p = core;
+            p.extent[i] = lo - core.origin[i];
+            pieces.push(p);
+            core.extent[i] -= lo - core.origin[i];
+            core.origin[i] = lo;
         }
-
-        let mut slot = 0;
-        for (_, _, emission) in operations {
-            for work in &emission.work[rank] {
-                for &region in &work.writes {
-                    validate_region(plan, region)?;
-                    producers[region.rank][region.value.index()].push(Producer {
-                        region,
-                        token: Dependency { rank, slot },
-                    });
-                }
-                slot += 1;
-            }
+        if core.origin[i] + core.extent[i] > hi {
+            let mut p = core;
+            p.origin[i] = hi;
+            p.extent[i] = core.origin[i] + core.extent[i] - hi;
+            pieces.push(p);
+            core.extent[i] = hi - core.origin[i];
         }
     }
-
-    // Task write regions must cover each rank-local tensor exactly once.
-    // External inputs are registered as full-tensor regions above.
-    for rank in &producers {
-        for (pieces, (value_id, value)) in rank.iter().zip(plan.value_instances()) {
-            let value_id = value_id.index();
-            let shape = region_shape(value.shape())?;
-
-            let mut area = 0usize;
-
-            for (i, piece) in pieces.iter().enumerate() {
-                area += piece.region.extent[0] * piece.region.extent[1];
-                // Reject multiple writers to the same tensor elements.
-                if pieces[..i]
-                    .iter()
-                    .any(|other| overlaps(piece.region, other.region))
-                {
-                    return Err(EmitError::Contract(format!(
-                        "overlapping writes to value {value_id}"
-                    )));
-                }
-            }
-
-            // In-bounds, non-overlapping regions must leave no elements unwritten.
-            if area != shape[0] * shape[1] {
-                return Err(EmitError::Contract(format!(
-                    "incomplete writes to value {value_id}"
-                )));
-            }
-        }
+    pieces
+}
+fn validate_region(plan: &PhysicalPlan, r: Region) -> Result<(), EmitError> {
+    let value = plan
+        .value_instance(r.value)
+        .ok_or_else(|| fail("unknown value"))?;
+    let shape = region_shape(value.shape())?;
+    if r.rank >= plan.world_size()
+        || r.extent.contains(&0)
+        || (0..3).any(|i| {
+            r.origin[i]
+                .checked_add(r.extent[i])
+                .is_none_or(|end| end > shape[i])
+        })
+    {
+        return Err(fail("out-of-bounds execution region"));
     }
-
-    let mut tasks = Vec::new();
-    let mut output_dependencies = Vec::new();
-    let mut launches = Vec::new();
-
-    // Turn backend work into execution tasks, using producers to connect each
-    // task's reads to the readiness tokens it must wait for.
-    for (rank, rank_producers) in producers.iter().enumerate() {
-        // Rank-local task index, also used as its completion-token slot.
-        let mut slot = 0;
-        let mut previous_collective = None;
-
-        for (action, operation, emission) in operations {
-            // Launch ranges are identical across ranks; record them once.
-            if rank == 0 {
-                launches.push(Launch {
-                    operation: operation.index(),
-                    begin: slot,
-                    count: emission.work[rank].len(),
-                });
-            }
-
-            for work in &emission.work[rank] {
-                let mut dependencies = resolve(plan, &producers, &work.reads, rank, count)?;
-                // Wait for the previous collective to finish on every rank.
-                if work.ordered_collective {
-                    if let Some(previous) = previous_collective {
-                        dependencies.extend((0..plan.world_size()).map(|rank| Dependency {
-                            rank,
-                            slot: previous,
-                        }));
-                    }
-                    previous_collective = Some(slot);
-                }
-
-                // Resolve inputs needed at each stage, e.g. each GEMM K-stage.
-                let stages = work
-                    .stages
-                    .iter()
-                    .map(|reads| {
-                        Ok(Stage {
-                            dependencies: resolve(plan, &producers, reads, rank, count)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, EmitError>>()?;
-
-                // The first stage's inputs must be ready before task entry.
-                if let Some(first) = stages.first() {
-                    dependencies.extend(&first.dependencies);
-                }
-
-                dependencies.sort_unstable();
-                dependencies.dedup();
-
-                tasks.push(Task {
-                    rank,
-                    slot,
-                    action: action.index(),
-                    operation: operation.index(),
-                    coordinate: work.coordinate,
-                    shared_memory_bytes: emission.shared_memory_bytes,
-                    dependencies,
-                    stages,
-                    ordered_collective: work.ordered_collective,
-                });
-                slot += 1;
-            }
-        }
-
-        // Persistent kernel exit waits for all final-output producers on this rank.
-        output_dependencies.push(
-            rank_producers[plan.output().value().index()]
-                .iter()
-                .map(|p| p.token)
-                .collect::<BTreeSet<_>>()
+    Ok(())
+}
+fn cover(read: Region, versions: &[AccessToken]) -> Result<Vec<Dependency>, EmitError> {
+    let mut remaining = vec![read];
+    let mut deps = BTreeSet::new();
+    for p in versions {
+        if overlaps(read, p.region) {
+            deps.insert(p.token);
+            remaining = remaining
                 .into_iter()
-                .collect(),
-        );
+                .flat_map(|r| subtract(r, p.region))
+                .collect();
+        }
     }
+    if !remaining.is_empty() {
+        return Err(fail(format!(
+            "read before production or incomplete writes to value {}",
+            read.value.index()
+        )));
+    }
+    Ok(deps.into_iter().collect())
+}
+fn concurrent(a: &Task, b: &Task) -> bool {
+    a.arguments
+        .iter()
+        .any(|(name, value)| b.arguments.get(name).is_some_and(|other| other != value))
+}
+fn add_dependency(
+    tasks: &mut [Task],
+    task: usize,
+    dependency: Dependency,
+    stage: Option<usize>,
+    count: usize,
+) {
+    if dependency
+        == (Dependency {
+            rank: tasks[task].rank,
+            slot: tasks[task].slot,
+        })
+        || dependency.rank == tasks[task].rank && dependency.slot == count
+    {
+        return;
+    }
+    match stage {
+        Some(stage) => tasks[task].stages[stage].dependencies.push(dependency),
+        None => tasks[task].dependencies.push(dependency),
+    }
+}
 
+/// Resolve lexical versions and stage readiness for every kind of body together.
+pub(super) fn resolve(
+    plan: &PhysicalPlan,
+    mut tasks: Vec<Task>,
+    effects: Vec<Effects>,
+    paths: Vec<Vec<usize>>,
+) -> Result<Execution, EmitError> {
+    let count = tasks.len() / plan.world_size();
+    let mut versions =
+        vec![vec![Vec::<AccessToken>::new(); plan.value_instances().len()]; plan.world_size()];
+    let mut readers = versions.clone();
+    let rewritten: BTreeSet<_> = plan
+        .value_instances()
+        .filter(|(id, _)| {
+            plan.operations()
+                .filter(|(_, op)| op.outputs().contains(id))
+                .count()
+                > 1
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for (rank, values) in versions.iter_mut().enumerate() {
+        for input in plan.inputs() {
+            if values[input.value().index()].is_empty() {
+                values[input.value().index()].push(AccessToken {
+                    region: full_region(plan, input.value(), rank),
+                    token: Dependency { rank, slot: count },
+                });
+            }
+        }
+    }
+    let mut timeline = Vec::new();
+    for (task, effect) in effects.iter().enumerate() {
+        for (event, _) in effect.events.iter().enumerate() {
+            timeline.push((task, event));
+        }
+    }
+    timeline.sort_by(|&(a, ae), &(b, be)| (&paths[a], ae, a).cmp(&(&paths[b], be, b)));
+    for (task, event_index) in timeline {
+        let event = &effects[task].events[event_index];
+        let region = event.region;
+        validate_region(plan, region)?;
+        let rank = region.rank;
+        let value = region.value.index();
+        let token = Dependency {
+            rank: tasks[task].rank,
+            slot: tasks[task].slot,
+        };
+        if !event.write {
+            for dependency in cover(region, &versions[rank][value])? {
+                if dependency.slot < count {
+                    let prior = dependency.rank * count + dependency.slot;
+                    if prior != task && concurrent(&tasks[prior], &tasks[task]) {
+                        return Err(fail("read/write conflict between parallel iterations"));
+                    }
+                }
+                add_dependency(&mut tasks, task, dependency, event.stage, count);
+            }
+            if rewritten.contains(&region.value)
+                && !readers[rank][value]
+                    .iter()
+                    .any(|r| r.region == region && r.token == token)
+            {
+                readers[rank][value].push(AccessToken { region, token });
+            }
+        } else {
+            for prior in versions[rank][value].iter().chain(&readers[rank][value]) {
+                if !overlaps(region, prior.region) || prior.token == token {
+                    continue;
+                }
+                if prior.token.slot < count {
+                    let index = prior.token.rank * count + prior.token.slot;
+                    if concurrent(&tasks[index], &tasks[task]) || paths[index] == paths[task] {
+                        return Err(fail("overlapping accesses between parallel work"));
+                    }
+                }
+                add_dependency(&mut tasks, task, prior.token, None, count);
+            }
+            let previous = std::mem::take(&mut versions[rank][value]);
+            versions[rank][value] = previous
+                .into_iter()
+                .flat_map(|p| {
+                    subtract(p.region, region)
+                        .into_iter()
+                        .map(move |region| AccessToken { region, ..p })
+                })
+                .collect();
+            versions[rank][value].push(AccessToken { region, token });
+            readers[rank][value] = std::mem::take(&mut readers[rank][value])
+                .into_iter()
+                .flat_map(|p| {
+                    subtract(p.region, region)
+                        .into_iter()
+                        .map(move |region| AccessToken { region, ..p })
+                })
+                .collect();
+        }
+    }
+    for rank in 0..plan.world_size() {
+        let mut previous = None;
+        for task in tasks.iter_mut().skip(rank * count).take(count) {
+            if task.ordered_collective {
+                if let Some(slot) = previous {
+                    task.dependencies
+                        .extend((0..plan.world_size()).map(|rank| Dependency { rank, slot }));
+                }
+                previous = Some(task.slot);
+            }
+            for stage in &mut task.stages {
+                stage.dependencies.sort_unstable();
+                stage.dependencies.dedup();
+            }
+            if let Some(first) = task.stages.first() {
+                task.dependencies.extend(&first.dependencies);
+            }
+            task.dependencies.sort_unstable();
+            task.dependencies.dedup();
+        }
+    }
+    let mut output_dependencies = Vec::new();
+    for (rank, values) in versions.iter().enumerate() {
+        output_dependencies.push(cover(
+            full_region(plan, plan.output().value(), rank),
+            &values[plan.output().value().index()],
+        )?);
+    }
     // Entry and future-stage dependencies must form an acyclic global graph.
     // This catches a malformed backend before it can strand a resident worker.
     let mut successors = vec![Vec::new(); tasks.len()];
@@ -351,79 +435,136 @@ pub(super) fn build(
         return Err(EmitError::Contract("cyclic execution dependencies".into()));
     }
 
+    // A streamed launch has no inter-CTA ordering. A task set must therefore be
+    // parallel after its internal, same-task accesses have been absorbed.
+    for task in &tasks {
+        for dep in task
+            .dependencies
+            .iter()
+            .chain(task.stages.iter().flat_map(|s| &s.dependencies))
+        {
+            if plan.world_size() == 1
+                && dep.slot < count
+                && tasks[dep.rank * count + dep.slot].task_set == task.task_set
+            {
+                return Err(fail("a task set requires inter-task synchronization"));
+            }
+        }
+    }
+
+    // A shared launch order must respect every rank's entry and future-stage
+    // prerequisites. Prefer ready work of the same body without sorting through
+    // a dependency. A body may consequently have more than one launch range.
+    let mut successors = vec![BTreeSet::new(); count];
+    let mut indegrees = vec![0; count];
+    for task in &tasks {
+        for dep in task
+            .dependencies
+            .iter()
+            .chain(task.stages.iter().flat_map(|s| &s.dependencies))
+        {
+            if dep.slot < count && dep.slot != task.slot && successors[dep.slot].insert(task.slot) {
+                indegrees[task.slot] += 1;
+            }
+        }
+    }
+    let mut ready = BTreeSet::new();
+    for (slot, &degree) in indegrees.iter().enumerate() {
+        if degree == 0 {
+            ready.insert((tasks[slot].task_set, tasks[slot].body, slot));
+        }
+    }
+    let mut order = Vec::new();
+    while let Some((_, _, slot)) = ready.pop_first() {
+        order.push(slot);
+        for &next in &successors[slot] {
+            indegrees[next] -= 1;
+            if indegrees[next] == 0 {
+                ready.insert((tasks[next].task_set, tasks[next].body, next));
+            }
+        }
+    }
+    if order.len() != count {
+        return Err(fail("no common acyclic launch order across ranks"));
+    }
+    let mut remap = vec![0; count];
+    for (slot, &old) in order.iter().enumerate() {
+        remap[old] = slot;
+    }
+    let remap_dep = |d: &mut Dependency| {
+        if d.slot < count {
+            d.slot = remap[d.slot];
+        }
+    };
+    let mut reordered = Vec::new();
+    let mut work = Vec::new();
+    for rank in 0..plan.world_size() {
+        for (slot, &old) in order.iter().enumerate() {
+            let mut task = tasks[rank * count + old].clone();
+            task.slot = slot;
+            for d in &mut task.dependencies {
+                remap_dep(d);
+            }
+            task.dependencies.sort_unstable();
+            for stage in &mut task.stages {
+                for d in &mut stage.dependencies {
+                    remap_dep(d);
+                }
+                stage.dependencies.sort_unstable();
+            }
+            reordered.push(task);
+            work.push(effects[rank * count + old].work.clone());
+        }
+    }
+    for ds in &mut output_dependencies {
+        for d in ds.iter_mut() {
+            remap_dep(d);
+        }
+        ds.sort_unstable();
+        ds.dedup();
+    }
+    let mut launches: Vec<Launch> = Vec::new();
+    for task in reordered.iter().take(count) {
+        if let Some(last) = launches.last_mut()
+            && last.task_set == task.task_set
+        {
+            last.count += 1;
+            if !last.bodies.contains(&task.body) {
+                last.bodies.push(task.body);
+            }
+        } else {
+            launches.push(Launch {
+                statement: task.statement,
+                task_set: task.task_set,
+                bodies: vec![task.body],
+                body: task.body,
+                begin: task.slot,
+                count: 1,
+            });
+        }
+    }
     Ok(Execution {
-        tasks,
+        tasks: reordered,
+        work,
         tasks_per_rank: count,
         output_dependencies,
         launches,
     })
 }
 
-fn validate_region(plan: &PhysicalPlan, region: Region) -> Result<(), EmitError> {
-    let value = plan
-        .value_instance(region.value)
-        .ok_or_else(|| EmitError::Contract("unknown value".into()))?;
-
-    let shape = region_shape(value.shape())?;
-    if region.rank >= plan.world_size()
-        || region.extent.contains(&0)
-        || (0..2).any(|axis| {
-            region.origin[axis]
-                .checked_add(region.extent[axis])
-                .is_none_or(|end| end > shape[axis])
-        })
-    {
-        return Err(EmitError::Contract("out-of-bounds execution region".into()));
-    }
-
-    Ok(())
-}
-
-fn resolve(
-    plan: &PhysicalPlan,
-    producers: &[Vec<Vec<Producer>>],
-    reads: &[Region],
-    local_rank: usize,
-    external_slot: usize,
-) -> Result<Vec<Dependency>, EmitError> {
-    let mut dependencies = BTreeSet::new();
-    for &read in reads {
-        validate_region(plan, read)?;
-        for producer in &producers[read.rank][read.value.index()] {
-            if overlaps(read, producer.region)
-                && !(producer.token.rank == local_rank && producer.token.slot == external_slot)
-            {
-                dependencies.insert(producer.token);
-            }
-        }
-    }
-    Ok(dependencies.into_iter().collect())
-}
-
-fn overlaps(a: Region, b: Region) -> bool {
-    (0..2).all(|axis| {
-        a.origin[axis] < b.origin[axis] + b.extent[axis]
-            && b.origin[axis] < a.origin[axis] + a.extent[axis]
-    })
-}
-
 pub(crate) fn full_region(plan: &PhysicalPlan, value: ValueInstanceId, rank: usize) -> Region {
-    let shape = plan.value_instance(value).unwrap().shape();
     Region::new(
         value,
         rank,
-        [0, 0],
-        region_shape(shape).expect("validated emit shape"),
+        [0; 3],
+        region_shape(plan.value_instance(value).unwrap().shape()).expect("validated tensor rank"),
     )
 }
-
-/// Vectors retain their public rank; only dependency geometry uses [L, 1].
-pub(crate) fn region_shape(shape: &[usize]) -> Result<[usize; 2], EmitError> {
-    match shape {
-        [length] => Ok([*length, 1]),
-        [rows, columns] => Ok([*rows, *columns]),
-        _ => Err(EmitError::Unsupported(
-            "only vectors and matrices are supported".into(),
-        )),
+pub(crate) fn region_shape(shape: &[usize]) -> Result<[usize; 3], EmitError> {
+    if !(1..=3).contains(&shape.len()) {
+        return Err(fail("supported tensor ranks are 1, 2, 3"));
     }
+    let mut out = [1; 3];
+    out[..shape.len()].copy_from_slice(shape);
+    Ok(out)
 }

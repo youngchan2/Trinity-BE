@@ -156,7 +156,7 @@ struct TensorView {
 inline void validate_tensor(BufferSpec const& s, TensorView const& t, int device) {
   auto width = s.dtype == "bf16" ? 2u : s.dtype == "fp32" ? 4u : 0u;
   std::size_t count=1;
-  bool valid=width && (s.shape.size()==1 || s.shape.size()==2) && s.strides.size()==s.shape.size();
+  bool valid=width && (s.shape.size()>=1 && s.shape.size()<=3) && s.strides.size()==s.shape.size();
   for (std::size_t axis=s.shape.size(); valid && axis-->0;) {
     auto extent=s.shape[axis];
     valid=extent>0 && s.strides[axis]==static_cast<std::int64_t>(count) && count<=2147483647u/static_cast<std::size_t>(extent);

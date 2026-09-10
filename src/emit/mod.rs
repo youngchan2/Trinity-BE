@@ -4,6 +4,7 @@
 pub mod cuda;
 
 pub use cuda::{
-    BufferBindingRequirement, CudaImplementation, CudaRequirements, CudaSource, Dependency,
-    EmitError, Execution, OperationEmission, Region, Stage, Task, Work, emit, render_template,
+    Binding, Body, BufferBindingRequirement, Code, CudaImplementation, CudaRequirements,
+    CudaSource, Dependency, EmitError, Execution, OperationSchedule, Phase, Region, Resources,
+    Stage, Symbol, SymbolId, Task, Work, emit, render_template,
 };

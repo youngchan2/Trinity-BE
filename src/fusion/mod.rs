@@ -1,14 +1,15 @@
-//! Action rewrites and exhaustive physical fusion candidate enumeration.
-
-use std::collections::{BTreeMap, BTreeSet};
+//! Ordered task-set fusion and backend binding/storage proposals.
 
 use thiserror::Error;
 
-use crate::{Action, OperationId, PhysicalInvariantError, PhysicalPlan, Storage, ValueInstanceId};
+use crate::{
+    OperationId, PhysicalInvariantError, PhysicalPlan, Statement, Storage, ValueInstanceId,
+};
 
-mod graph;
+use std::collections::BTreeSet;
 
-/// Proposes rewrites that merge a producer and consumer Action into one Action.
+/// Proposes operation and storage rewrites for producer and consumer statements.
+/// Proposals preserve the original operation order and sequential scopes.
 pub trait FusionRule: Sync {
     /// Returns separate rewrites for storage alternatives (e.g. Shared/Register).
     /// An empty `Ok` means unsupported; `Err` aborts [`fuse`].
@@ -19,16 +20,16 @@ pub trait FusionRule: Sync {
     fn apply(
         &self,
         plan: &PhysicalPlan,
-        producer: &Action,
-        consumer: &Action,
+        producer: &Statement,
+        consumer: &Statement,
     ) -> Result<Vec<FusionRewrite>, FusionError>;
 }
 
-/// Replaces two Actions with their operation union and promotes internal values.
+/// A fusion proposal listing merged operations and storage promotions.
 ///
 /// Storage updates must be unique Global-to-Shared/Register promotions. ABI
-/// values and values used outside the combined Action cannot be promoted.
-/// Action inputs and outputs are derived by physical finalization.
+/// values and values used outside the merged operations cannot be promoted.
+/// The common rewriter constructs the replacement Statement tree and CUDA body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FusionRewrite {
     operations: Vec<OperationId>,
@@ -57,6 +58,8 @@ impl FusionRewrite {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FusionError {
+    #[error("downstream fusion is not connected to the structured Statement model")]
+    UnsupportedStatementModel,
     #[error("invalid fusion rewrite: {reason}")]
     InvalidRewrite { reason: &'static str },
 
@@ -64,120 +67,142 @@ pub enum FusionError {
     InvalidPlan(#[from] PhysicalInvariantError),
 }
 
-impl FusionError {
-    fn invalid(reason: &'static str) -> Self {
-        Self::InvalidRewrite { reason }
-    }
-}
-
-/// Enumerates the original plan and all unique plans reachable by these rules.
-///
-/// Traversal is breadth-first, with canonical Action pairs and caller-provided
-/// rule order. Every rewrite removes exactly one Action; no cost pruning or
-/// candidate limit is applied. The input plan is never mutated.
+/// Enumerate the original plan and legal adjacent fusions to a fixed point.
+/// Every candidate is rebuilt transactionally and checked by common CUDA lowering.
 pub fn fuse(
     plan: &PhysicalPlan,
     rules: &[&dyn FusionRule],
 ) -> Result<Vec<PhysicalPlan>, FusionError> {
-    let mut plans = vec![plan.clone()];
-    let mut seen = BTreeMap::from([(plan.hash(), vec![0usize])]);
-
+    let mut results = vec![plan.clone()];
     let mut cursor = 0;
-
-    while cursor < plans.len() {
-        let source = &plans[cursor];
-        let graph = graph::ActionGraph::new(source);
-        let mut successors = Vec::new();
-
-        for (producer_id, consumer_id) in graph.mergeable_pairs() {
-            let producer = source.action(producer_id).unwrap();
-            let consumer = source.action(consumer_id).unwrap();
-
+    while cursor < results.len() {
+        let current = results[cursor].clone();
+        for left in 0..current.statements().len().saturating_sub(1) {
+            let producer = &current.statements()[left];
+            let consumer = &current.statements()[left + 1];
             for rule in rules {
-                for rewrite in rule.apply(source, producer, consumer)? {
-                    validate_rewrite(source, producer, consumer, &rewrite)?;
-                    successors.push(crate::physical::rewrite_actions(
-                        source,
-                        producer_id,
-                        consumer_id,
-                        rewrite.operations(),
-                        rewrite.storage_updates(),
-                    )?);
+                for proposal in rule.apply(&current, producer, consumer)? {
+                    validate(&current, producer, consumer, &proposal)?;
+                    let Some(candidate) =
+                        crate::physical::rewrite_statements(&current, left, &proposal)?
+                    else {
+                        continue;
+                    };
+                    // This checks task-local lifetimes, layout adapters, accesses,
+                    // stages, resource limits and the reconstructed dependency DAG.
+                    if crate::emit(&candidate).is_err() {
+                        continue;
+                    }
+                    if !results.iter().any(|p| p.same_body(&candidate)) {
+                        results.push(candidate);
+                    }
                 }
-            }
-        }
-
-        for candidate in successors {
-            let bucket = seen.entry(candidate.hash()).or_default();
-            if !bucket
-                .iter()
-                .any(|index| candidate.same_body(&plans[*index]))
-            {
-                bucket.push(plans.len());
-                plans.push(candidate);
             }
         }
         cursor += 1;
     }
-
-    Ok(plans)
+    Ok(results)
 }
 
-fn validate_rewrite(
+fn validate(
     plan: &PhysicalPlan,
-    producer: &Action,
-    consumer: &Action,
-    rewrite: &FusionRewrite,
+    producer: &Statement,
+    consumer: &Statement,
+    proposal: &FusionRewrite,
 ) -> Result<(), FusionError> {
-    let expected = producer
+    let invalid = |reason| FusionError::InvalidRewrite { reason };
+    let expected: Vec<_> = producer
         .operations()
-        .iter()
+        .into_iter()
         .chain(consumer.operations())
-        .copied()
-        .collect::<BTreeSet<_>>();
-    let actual = rewrite.operations.iter().copied().collect::<BTreeSet<_>>();
-    if actual != expected || actual.len() != rewrite.operations.len() {
-        return Err(FusionError::invalid(
-            "operations must be exactly the union of the two Actions, without duplicates",
+        .collect();
+    if proposal.operations != expected || proposal.storage_updates.is_empty() {
+        return Err(invalid(
+            "rewrite must preserve the adjacent regions and promote a binding",
         ));
     }
-
+    let members: BTreeSet<_> = expected.iter().copied().collect();
     let mut updated = BTreeSet::new();
-    for (value_id, storage) in &rewrite.storage_updates {
-        if !updated.insert(*value_id) {
-            return Err(FusionError::invalid("a value has multiple storage updates"));
-        }
-        let Some(value) = plan.value_instance(*value_id) else {
-            return Err(FusionError::invalid(
-                "storage update refers to an unknown value",
-            ));
+    for &(id, storage) in &proposal.storage_updates {
+        let Some(value) = plan.value_instance(id) else {
+            return Err(invalid("unknown promoted value"));
         };
-        if value.storage() != Storage::Global
+        if !updated.insert(id)
+            || value.storage() != Storage::Global
             || !matches!(storage, Storage::Shared | Storage::Register)
+            || plan.output().value() == id
+            || plan.inputs().iter().any(|b| b.value() == id)
+            || plan.operations().any(|(op, p)| {
+                !members.contains(&op) && (p.inputs().contains(&id) || p.outputs().contains(&id))
+            })
+            || plan
+                .operations()
+                .filter(|(_, p)| p.outputs().contains(&id))
+                .count()
+                != 1
         {
-            return Err(FusionError::invalid(
-                "storage updates must promote Global values to Shared or Register",
+            return Err(invalid(
+                "promotion needs a unique internal producer and no external uses",
             ));
         }
-        if plan.output().value() == *value_id
-            || plan.inputs().iter().any(|input| input.value() == *value_id)
+        if !producer
+            .operations()
+            .iter()
+            .any(|op| plan.operation(*op).unwrap().outputs().contains(&id))
+            || !consumer
+                .operations()
+                .iter()
+                .any(|op| plan.operation(*op).unwrap().inputs().contains(&id))
         {
-            return Err(FusionError::invalid("ABI values cannot be promoted"));
-        }
-        let internal_producer = expected.iter().any(|operation| {
-            plan.operation(*operation)
-                .unwrap()
-                .outputs()
-                .contains(value_id)
-        });
-        let external_consumer = plan.operations().any(|(id, operation)| {
-            operation.inputs().contains(value_id) && !expected.contains(&id)
-        });
-        if !internal_producer || external_consumer {
-            return Err(FusionError::invalid(
-                "promoted values must be produced and used exclusively inside the fused Action",
-            ));
+            return Err(invalid("promoted binding must connect the two regions"));
         }
     }
     Ok(())
+}
+
+/// Equal-coordinate pointwise expressions can reuse a producer's tile traversal.
+pub(crate) fn pointwise(plan: &PhysicalPlan, id: OperationId) -> bool {
+    let Some(op) = plan.operation(id) else {
+        return false;
+    };
+    let crate::OperationPayload::Compute(compute) = op.payload() else {
+        return false;
+    };
+    let selected = compute.implementation().id();
+    if selected.as_str() != "cuda.simt.expression"
+        && !crate::pointwise_implementations(plan.target())
+            .iter()
+            .any(|d| d.id() == selected)
+    {
+        return false;
+    }
+    let Some(store) = op.expression().and_then(crate::Expression::list) else {
+        return false;
+    };
+    if store.len() != 4 || op.outputs().len() != 1 {
+        return false;
+    }
+    let shape = plan.value_instance(op.outputs()[0]).unwrap().shape();
+    if op
+        .inputs()
+        .iter()
+        .any(|v| plan.value_instance(*v).unwrap().shape() != shape)
+    {
+        return false;
+    }
+    fn check(e: &crate::Expression, index: &crate::Expression) -> bool {
+        if e.atom().is_some() {
+            return true;
+        }
+        let Some(xs) = e.list() else { return false };
+        match e.operator() {
+            Some("load") => xs.len() == 3 && &xs[2] == index,
+            Some("float_bits") => true,
+            Some("+" | "-" | "*" | "/" | "relu" | "sqrt" | "sigmoid" | "sqr") => {
+                xs[1..].iter().all(|x| check(x, index))
+            }
+            _ => false,
+        }
+    }
+    !op.inputs().contains(&op.outputs()[0]) && check(&store[2], &store[3])
 }

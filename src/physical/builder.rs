@@ -1,16 +1,17 @@
 use super::finalize::finalize;
 use super::plan::IdVec;
 use super::{
-    ActionId, Operation, OperationId, OperationPayload, PhysicalInvariantError, PhysicalPlan,
-    Storage, TensorBinding, ValueInstance, ValueInstanceId,
+    Operation, OperationId, OperationPayload, PhysicalInvariantError, PhysicalPlan, Storage,
+    TensorBinding, ValueInstance, ValueInstanceId,
 };
 use crate::{DType, TargetCapability};
 
 /// Builds one physical implementation branch before validation and canonicalization.
 ///
 /// Callers supply concrete tensor presentations and applicable implementation
-/// instances. Finalization checks physical graph invariants and derives Action
-/// boundaries; it does not repeat logical or implementation applicability checks.
+/// instances and an ordered Statement program. Finalization first normalizes selected implementations into explicit loops and
+/// tile expressions, then checks common physical invariants; it does not
+/// repeat upstream scheduling/fusion legality analysis.
 /// IDs belong to this builder (or its clones) and may be remapped by finalization.
 #[derive(Clone)]
 pub struct PhysicalPlanBuilder {
@@ -19,7 +20,7 @@ pub struct PhysicalPlanBuilder {
     pub(super) inputs: Vec<TensorBinding>,
     pub(super) values: IdVec<ValueInstanceId, ValueInstance>,
     pub(super) operations: IdVec<OperationId, Operation>,
-    pub(super) action_operations: IdVec<ActionId, Vec<OperationId>>,
+    pub(super) statements: Vec<super::Statement>,
 }
 
 impl PhysicalPlanBuilder {
@@ -30,7 +31,7 @@ impl PhysicalPlanBuilder {
             inputs: Vec::new(),
             values: IdVec::new(),
             operations: IdVec::new(),
-            action_operations: IdVec::new(),
+            statements: Vec::new(),
         }
     }
 
@@ -57,12 +58,43 @@ impl PhysicalPlanBuilder {
             .push(Operation::new(inputs, outputs, payload))
     }
 
-    pub fn add_action(&mut self, operations: impl IntoIterator<Item = OperationId>) -> ActionId {
-        self.action_operations
-            .push(operations.into_iter().collect())
+    /// Appends a top-level statement in program order.
+    pub fn add_statement(&mut self, statement: super::Statement) {
+        self.statements.push(statement);
     }
 
-    /// Validates and canonicalizes the graph, consuming all construction state.
+    pub fn add_named_value(
+        &mut self,
+        name: impl Into<String>,
+        dtype: DType,
+        shape: impl IntoIterator<Item = usize>,
+        storage: Storage,
+    ) -> ValueInstanceId {
+        let id = self.add_value(dtype, shape, storage);
+        self.values.values[id.index()].name = Some(name.into());
+
+        id
+    }
+
+    pub fn add_expression(
+        &mut self,
+        inputs: impl IntoIterator<Item = ValueInstanceId>,
+        outputs: impl IntoIterator<Item = ValueInstanceId>,
+        expression: super::Expression,
+        implementation: crate::ImplementationInstance,
+    ) -> OperationId {
+        let id = self.add_operation(
+            inputs,
+            outputs,
+            OperationPayload::Compute(super::ComputeOperation::new(implementation)),
+        );
+        self.operations.values[id.index()].expression = Some(expression);
+
+        id
+    }
+
+    /// Normalizes the scheduled program, validates it, and canonicalizes IDs.
+    /// Unsupported builder geometry may fail here before CUDA emission.
     ///
     /// Query the returned plan's bindings and graph for canonical IDs rather than
     /// reusing IDs obtained before finalization.

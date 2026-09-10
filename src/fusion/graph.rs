@@ -1,20 +1,20 @@
 use std::collections::BTreeSet;
 
-use crate::{ActionId, PhysicalPlan};
+use crate::PhysicalPlan;
 
-/// Rebuilt for each canonical plan because finalization remaps IDs.
-pub(super) struct ActionGraph {
-    actions: Vec<ActionId>,
-    successors: Vec<BTreeSet<ActionId>>,
+/// Rebuilt for each plan using positions in its top-level statement list.
+pub(super) struct StatementGraph {
+    statements: Vec<usize>,
+    successors: Vec<BTreeSet<usize>>,
 }
 
-impl ActionGraph {
+impl StatementGraph {
     pub(super) fn new(plan: &PhysicalPlan) -> Self {
-        let actions = plan.actions().map(|(id, _)| id).collect::<Vec<_>>();
+        let statements = (0..plan.statements().len()).collect::<Vec<_>>();
         let mut owners = vec![None; plan.operations().len()];
-        for (action_id, action) in plan.actions() {
-            for operation in action.operations() {
-                owners[operation.index()] = Some(action_id);
+        for (statement_index, statement) in plan.statements().iter().enumerate() {
+            for operation in statement.operations() {
+                owners[operation.index()] = Some(statement_index);
             }
         }
         let mut producers = vec![None; plan.value_instances().len()];
@@ -23,26 +23,26 @@ impl ActionGraph {
                 producers[output.index()] = owners[id.index()];
             }
         }
-        let mut successors = vec![BTreeSet::new(); actions.len()];
+        let mut successors = vec![BTreeSet::new(); statements.len()];
         for (id, operation) in plan.operations() {
             let consumer = owners[id.index()].unwrap();
             for input in operation.inputs() {
                 if let Some(producer) = producers[input.index()]
                     && producer != consumer
                 {
-                    successors[producer.index()].insert(consumer);
+                    successors[producer].insert(consumer);
                 }
             }
         }
         Self {
-            actions,
+            statements,
             successors,
         }
     }
 
-    pub(super) fn mergeable_pairs(&self) -> impl Iterator<Item = (ActionId, ActionId)> + '_ {
-        self.actions.iter().copied().flat_map(move |producer| {
-            self.successors[producer.index()]
+    pub(super) fn mergeable_pairs(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.statements.iter().copied().flat_map(move |producer| {
+            self.successors[producer]
                 .iter()
                 .copied()
                 .filter(move |consumer| !self.has_alternate_path(producer, *consumer))
@@ -52,20 +52,20 @@ impl ActionGraph {
 
     // Contracting p -> c creates a cycle exactly when another p -> ... -> c
     // path exists. Such a pair is a normal non-match, not a broken rewrite.
-    fn has_alternate_path(&self, producer: ActionId, consumer: ActionId) -> bool {
-        let mut pending = self.successors[producer.index()]
+    fn has_alternate_path(&self, producer: usize, consumer: usize) -> bool {
+        let mut pending = self.successors[producer]
             .iter()
             .copied()
             .filter(|id| *id != consumer)
             .collect::<Vec<_>>();
-        let mut visited = vec![false; self.actions.len()];
+        let mut visited = vec![false; self.statements.len()];
         while let Some(id) = pending.pop() {
             if id == consumer {
                 return true;
             }
-            if !visited[id.index()] {
-                visited[id.index()] = true;
-                pending.extend(self.successors[id.index()].iter().copied());
+            if !visited[id] {
+                visited[id] = true;
+                pending.extend(self.successors[id].iter().copied());
             }
         }
         false

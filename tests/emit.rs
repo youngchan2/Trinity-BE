@@ -2,7 +2,7 @@
 mod support;
 use std::collections::BTreeSet;
 use trinity_lowering::{
-    CudaTargetCapability, EmitError, OperationPayload, TargetCapability, emit, fuse, fusion_rules,
+    CudaTargetCapability, OperationPayload, TargetCapability, emit, fuse, fusion_rules,
 };
 
 #[test]
@@ -89,7 +89,7 @@ fn streamed_kernels_use_stream_order_without_a_device_scheduler() {
     for launch in launches {
         let call = format!(
             "kernel_{}<<<{}, kThreads, kSharedBytes, stream>>>(bindings)",
-            launch.operation, launch.count
+            launch.body, launch.count
         );
         let position = code.find(&call).unwrap();
         assert!(previous.is_none_or(|p| p < position));
@@ -119,8 +119,8 @@ fn persistent_runtime_keeps_control_storage_and_stage_hooks() {
             "complete_task",
             "PersistentRuntime{c, task}",
             "nvshmemx_collective_launch",
-            "runtime.await_stage(0)",
-            "runtime.prefetch_stage(k + 1, K / 64)",
+            "runtime.await_stage(stage_base_",
+            "runtime.prefetch_stage(stage_base_",
         ] {
             assert!(source.code().contains(required), "missing {required}");
         }
@@ -149,14 +149,14 @@ fn peer_regions_match_an_elementwise_allgather_oracle_on_both_axes() {
         for axis in 0..2 {
             let plan = support::gather(backend, axis, 3);
             let (id, op) = plan.operations().next().unwrap();
-            let OperationPayload::Communication(comm) = op.payload() else {
+            let OperationPayload::Communication(_comm) = op.payload() else {
                 unreachable!()
             };
-            let implementation = comm.implementation().definition().cuda().unwrap();
+
             let source = plan.value_instance(op.inputs()[0]).unwrap().shape();
             let target = plan.value_instance(op.outputs()[0]).unwrap().shape();
             let mut seen = vec![vec![false; target[0] * target[1]]; 3];
-            let emission = implementation.specialize(&plan, id).unwrap();
+            let emission = support::operation_work(&plan, id);
             for rank_work in emission.work {
                 for work in rank_work {
                     for write in &work.writes {
@@ -216,40 +216,19 @@ fn gemm_only_waits_for_the_regions_read_by_each_k_stage() {
                 for (stage, actual) in task.stages.iter().enumerate() {
                     let expected_region = ([stage * 64, task.coordinate[1] * 128], [64, 128]);
                     let mut expected = BTreeSet::new();
-                    for rank in 0..2 {
-                        let mut slot = 0;
-                        for (id, op) in plan.operations() {
-                            let definition = match op.payload() {
-                                OperationPayload::Compute(x) => x.implementation().definition(),
-                                OperationPayload::Communication(x) => {
-                                    x.implementation().definition()
-                                }
-                            };
-                            for work in definition
-                                .cuda()
-                                .unwrap()
-                                .specialize(&plan, id)
-                                .unwrap()
-                                .work[rank]
-                                .iter()
+                    for (producer, work) in execution.tasks.iter().zip(&execution.work) {
+                        for write in &work.writes {
+                            if write.value == rhs
+                                && write.rank == task.rank
+                                && (0..2).all(|a| {
+                                    write.origin[a] < expected_region.0[a] + expected_region.1[a]
+                                        && expected_region.0[a] < write.origin[a] + write.extent[a]
+                                })
                             {
-                                for write in &work.writes {
-                                    if write.value == rhs
-                                        && write.rank == task.rank
-                                        && (0..2).all(|a| {
-                                            write.origin[a]
-                                                < expected_region.0[a] + expected_region.1[a]
-                                                && expected_region.0[a]
-                                                    < write.origin[a] + write.extent[a]
-                                        })
-                                    {
-                                        expected.insert(trinity_lowering::emit::Dependency {
-                                            rank,
-                                            slot,
-                                        });
-                                    }
-                                }
-                                slot += 1;
+                                expected.insert(trinity_lowering::emit::Dependency {
+                                    rank: producer.rank,
+                                    slot: producer.slot,
+                                });
                             }
                         }
                     }
@@ -275,7 +254,7 @@ fn gemm_only_waits_for_the_regions_read_by_each_k_stage() {
 #[test]
 fn compute_edges_wait_for_the_whole_producer_but_output_gather_uses_tiles() {
     let source = emit(&support::gemm_chain()).unwrap();
-    for t in source.execution().tasks.iter().filter(|t| t.operation == 1) {
+    for t in source.execution().tasks.iter().filter(|t| t.body == 1) {
         assert_eq!(t.dependencies.len(), 4);
         assert!(t.stages.iter().all(|s| s.dependencies.is_empty()));
     }
@@ -293,7 +272,7 @@ fn compute_edges_wait_for_the_whole_producer_but_output_gather_uses_tiles() {
 }
 
 #[test]
-fn nvls_collectives_share_one_world_order_including_different_actions() {
+fn nvls_collectives_share_one_world_order_including_different_statements() {
     let source = emit(&support::peer_chain(
         "one_shot_push_nbi",
         "one_shot_push_nbi",
@@ -324,7 +303,7 @@ fn nvls_collectives_share_one_world_order_including_different_actions() {
 }
 
 #[test]
-fn promoted_storage_is_rejected() {
+fn fusion_emits_a_single_task_set_for_compatible_gemms() {
     let mut b = support::Builder::new(1);
     let a = b.input("A", [128, 128]);
     let w = b.input("W", [128, 128]);
@@ -332,15 +311,13 @@ fn promoted_storage_is_rejected() {
     let x = b.gemm(a, w, 128, 128, 128);
     let y = b.gemm(x, v, 128, 128, 128);
     let plan = b.finish(y);
-    let plans = fuse(
+    let result = fuse(
         &plan,
         fusion_rules(TargetCapability::Cuda(CudaTargetCapability::Hopper)),
-    )
-    .unwrap();
-    assert!(plans.len() > 1);
-    for plan in &plans[1..] {
-        assert!(matches!(emit(plan), Err(EmitError::Unsupported(_))));
-    }
+    );
+    let plans = result.unwrap();
+    assert_eq!(plans.len(), 2);
+    assert_eq!(emit(&plans[1]).unwrap().execution().launches.len(), 1);
 }
 
 #[test]
@@ -362,20 +339,44 @@ fn public_builder_with_inapplicable_instance_returns_error() {
         b.bind_input("W", w);
         let out = b.add_value(dtype, [128, 128], Storage::External);
         let op = b.add_operation([a, w], [out], payload.clone());
-        b.add_action([op]);
+        b.add_statement(trinity_lowering::Statement::Operation(op));
         assert!(matches!(
-            emit(&b.finalize("Y", out).unwrap()),
-            Err(EmitError::Unsupported(_))
+            b.finalize("Y", out),
+            Err(trinity_lowering::PhysicalInvariantError::InvalidProgram(_))
         ));
     }
 }
 
 #[test]
 fn nvls_rejects_unpacked_bf16_columns_before_cuda_generation() {
-    let mut b = support::Builder::new(2);
-    let x = b.input("X", [128, 3]);
-    let y = b.gather(x, [128, 3], 0, 2, "one_shot_push_nbi");
-    assert!(matches!(emit(&b.finish(y)), Err(EmitError::Unsupported(_))));
+    use trinity_lowering::*;
+    let mut b = PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 2);
+    let x = b.add_value(DType::Bf16, [128, 3], Storage::External);
+    b.bind_input("X", x);
+    let y = b.add_value(DType::Bf16, [256, 3], Storage::External);
+    let instance = all_gather_implementations(b_target())[0]
+        .enumerate(DType::Bf16, [&[128, 3], &[256, 3]], 0, 2)
+        .pop()
+        .unwrap();
+    let id = b.add_operation(
+        [x],
+        [y],
+        OperationPayload::Communication(CommunicationOperation::new(
+            CommunicationKind::AllGather,
+            instance,
+        )),
+    );
+    b.add_statement(Statement::Operation(id));
+    assert!(
+        b.finalize("Y", y)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("even row-major")
+    );
+    fn b_target() -> TargetCapability {
+        TargetCapability::Cuda(CudaTargetCapability::Hopper)
+    }
 }
 
 #[test]
@@ -387,21 +388,15 @@ fn gathered_lhs_stage_readiness_tracks_m_rows_and_k_columns() {
                 .operations()
                 .find(|(_, op)| matches!(op.payload(), OperationPayload::Compute(_)))
                 .unwrap();
-            let OperationPayload::Compute(gemm) = op.payload() else {
+            let OperationPayload::Compute(_gemm) = op.payload() else {
                 unreachable!()
             };
-            let emission = gemm
-                .implementation()
-                .definition()
-                .cuda()
-                .unwrap()
-                .specialize(&plan, id)
-                .unwrap();
+            let emission = support::operation_work(&plan, id);
             for work in &emission.work[0] {
                 for (k, reads) in work.stages.iter().enumerate() {
                     let lhs = reads.iter().find(|r| r.value == op.inputs()[0]).unwrap();
-                    assert_eq!(lhs.origin, [work.coordinate[0] * 128, k * 64]);
-                    assert_eq!(lhs.extent, [128, 64]);
+                    assert_eq!(lhs.origin, [work.coordinate[0] * 128, k * 64, 0]);
+                    assert_eq!(lhs.extent, [128, 64, 1]);
                 }
             }
             let source = emit(&plan).unwrap();
@@ -416,32 +411,49 @@ fn gathered_lhs_stage_readiness_tracks_m_rows_and_k_columns() {
 }
 
 #[test]
-fn rejects_tensor_spans_that_exceed_cute_index_width() {
+fn emits_tensor_spans_beyond_32_bit_indexing() {
     use trinity_lowering::{DType, PhysicalPlanBuilder, Storage};
 
-    let plan = support::gemm(65536, 128, 65536, 1);
-    assert!(matches!(emit(&plan), Err(EmitError::Unsupported(_))));
-
-    // Identity plans exercise the size boundary without enumerating GEMM work.
-    for shape in [
-        [i32::MAX as usize, 1],
-        [i32::MAX as usize + 1, 1],
-        [2, i32::MAX as usize / 2 + 1],
-        [usize::MAX, 2],
-        [1, usize::MAX],
-    ] {
-        let mut b =
-            PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
-        let value = b.add_value(DType::Bf16, shape, Storage::External);
-        b.bind_input("X", value);
-        let result = emit(&b.finalize("Y", value).unwrap());
-        if shape == [i32::MAX as usize, 1] {
-            assert_eq!(
-                result.unwrap().requirements().buffers[0].bytes,
-                i32::MAX as usize * 2
+    // Metadata needs no device allocation or enumeration of billions of elements.
+    for world in [1, 2] {
+        for shape in [
+            [i32::MAX as usize, 1],
+            [i32::MAX as usize + 1, 1],
+            [32768, 65536],
+            [65536, 65536],
+        ] {
+            let mut b = PhysicalPlanBuilder::new(
+                TargetCapability::Cuda(CudaTargetCapability::Hopper),
+                world,
             );
-        } else {
-            assert!(matches!(result, Err(EmitError::Unsupported(_))));
+            let value = b.add_value(DType::Bf16, shape, Storage::External);
+            b.bind_input("X", value);
+            let source = emit(&b.finalize("Y", value).unwrap()).unwrap();
+            let buffer = &source.requirements().buffers[0];
+            assert_eq!(buffer.bytes, shape.iter().product::<usize>() * 2);
+            assert_eq!(buffer.strides, [shape[1], 1]);
+        }
+    }
+}
+
+#[test]
+fn simt_and_gemm_access_tiles_beyond_32_bit_offsets() {
+    for world in [1, 2] {
+        for gemm in [false, true] {
+            let source = emit(&support::loop_ir::large_offset(world, gemm)).unwrap();
+            assert_eq!(source.execution().tasks_per_rank, 1);
+            let input = source
+                .requirements()
+                .buffers
+                .iter()
+                .find(|b| b.input_names.iter().any(|n| n == "X"))
+                .unwrap();
+            assert!(input.bytes > (1usize << 32) * 2);
+            assert!(source.code().contains("std::int64_t(lv0)"));
+            if !gemm {
+                assert!(source.code().contains("{4294967296},"));
+                assert!(source.code().contains("const std::int64_t body_0_args"));
+            }
         }
     }
 }

@@ -48,7 +48,10 @@ def test_graph_example_lowers_gemm_bias_and_relu():
     plan = gemm_relu()
     metadata = json.loads(plan.metadata_json())
     assert {b["name"] for b in metadata["inputs"]} == {"X", "W", "bias"}
-    assert len(metadata["operations"]) == len(metadata["actions"]) == 3
+    assert len(metadata["operations"]) == len(metadata["statements"]) == 3
+    assert metadata["statements"] == [
+        {"operations": [operation["id"]]} for operation in metadata["operations"]
+    ]
     source = tl.emit(plan)
     assert sum(not b.external for b in source.requirements.buffers) == 2
     assert all(b.dtype == "bf16" for b in source.requirements.buffers)
@@ -90,7 +93,7 @@ def test_fp32_metadata_rejects_wrong_bytes_stride_rank():
     for update in (
         {"bytes": 258},
         {"strides": [2]},
-        {"shape": [1, 1, 129], "strides": [129, 129, 1]},
+        {"shape": [1, 1, 1, 129], "strides": [129, 129, 129, 1]},
         {"dtype": "fp64"},
     ):
         corrupted = json.loads(json.dumps(data))

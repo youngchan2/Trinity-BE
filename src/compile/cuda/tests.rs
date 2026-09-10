@@ -30,7 +30,7 @@ fn source(world: usize) -> CudaSource {
         [y],
         OperationPayload::Compute(ComputeOperation::new(instance)),
     );
-    b.add_action([op]);
+    b.add_statement(crate::Statement::Operation(op));
 
     emit(&b.finalize("y", y).unwrap()).unwrap()
 }

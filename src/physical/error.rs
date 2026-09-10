@@ -4,6 +4,8 @@ use super::plan::Storage;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PhysicalInvariantError {
+    #[error("invalid structured program: {0}")]
+    InvalidProgram(String),
     #[error("physical plan world size must be greater than zero")]
     InvalidWorldSize,
 
@@ -16,7 +18,7 @@ pub enum PhysicalInvariantError {
     #[error("value instance {value} referenced by {context} does not exist")]
     InvalidValueId { value: usize, context: &'static str },
 
-    #[error("operation {operation} referenced by an action does not exist")]
+    #[error("operation {operation} referenced by a statement does not exist")]
     InvalidOperationId { operation: usize },
 
     #[error("value instance {value} has multiple producers")]
@@ -40,21 +42,21 @@ pub enum PhysicalInvariantError {
     #[error("operation graph contains a cycle")]
     OperationCycle,
 
-    #[error("action graph contains a cycle")]
-    ActionCycle,
+    #[error("statement graph contains a cycle")]
+    StatementCycle,
 
-    #[error("action {action} contains no operations")]
-    EmptyAction { action: usize },
+    #[error("statement {statement} contains no operations")]
+    EmptyStatement { statement: usize },
 
-    #[error("operation {operation} does not belong to an action")]
-    MissingActionMembership { operation: usize },
+    #[error("operation {operation} does not belong to a statement")]
+    MissingStatementMembership { operation: usize },
 
-    #[error("operation {operation} belongs to multiple actions")]
-    DuplicateActionMembership { operation: usize },
+    #[error("operation {operation} belongs to multiple statements")]
+    DuplicateStatementMembership { operation: usize },
 
-    #[error("action {action} contains operation {operation} more than once")]
-    DuplicateOperationInAction { action: usize, operation: usize },
+    #[error("statement {statement} contains operation {operation} more than once")]
+    DuplicateOperationInStatement { statement: usize, operation: usize },
 
-    #[error("value instance {value} in {storage:?} storage crosses an action boundary")]
-    CrossActionStorage { value: usize, storage: Storage },
+    #[error("value instance {value} in {storage:?} storage crosses a statement boundary")]
+    CrossStatementStorage { value: usize, storage: Storage },
 }

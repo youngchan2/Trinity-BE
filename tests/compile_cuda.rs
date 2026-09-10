@@ -15,6 +15,16 @@ fn check(plan: PhysicalPlan) {
 
 #[test]
 #[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU required"]
+fn normalized_builder_sources_compile_and_link() {
+    check(support::gemm(128, 128, 192, 1));
+    check(support::tensor::normalization(16, 256, 1));
+    check(support::gemm(128, 128, 192, 2));
+    check(support::gather("peer_push", 1, 2));
+    check(support::gather("one_shot_push_nbi", 0, 2));
+}
+
+#[test]
+#[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU required"]
 fn tensor_operation_sources_compile_and_link() {
     use support::tensor;
     use trinity_lowering::DType;
@@ -77,6 +87,27 @@ fn streamed_sources_compile_and_link() {
     let mut b = support::Builder::new(1);
     let input = b.input("identity", [128, 128]);
     check(b.finish(input));
+}
+
+#[test]
+#[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU or large allocation required"]
+fn large_offset_sources_compile_and_link() {
+    for world in [1, 2] {
+        for gemm in [false, true] {
+            check(support::loop_ir::large_offset(world, gemm));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 13.0+, CUTLASS and NVSHMEM_HOME; no GPU or large allocation required"]
+fn large_nvls_sources_compile_and_link() {
+    for axis in [0, 1] {
+        let mut b = support::Builder::new(2);
+        let input = b.input("X", [65536, 65536]);
+        let output = b.gather(input, [65536, 65536], axis, 2, "one_shot_push_nbi");
+        check(b.finish(output));
+    }
 }
 
 #[test]

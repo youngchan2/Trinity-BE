@@ -78,7 +78,7 @@ fn manual_plan(
     reverse_values: bool,
     reverse_operations: bool,
     intermediate_storage: Storage,
-    combined_action: bool,
+    combined_statement: bool,
 ) -> Result<PhysicalPlan, PhysicalInvariantError> {
     let mut branch =
         PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
@@ -108,14 +108,20 @@ fn manual_plan(
         let second = branch.add_operation([intermediate, b], [output], payload());
         (first, second)
     };
-    if combined_action {
-        branch.add_action([first, second]);
-    } else if reverse_operations {
-        branch.add_action([second]);
-        branch.add_action([first]);
+    if combined_statement {
+        branch.add_statement(Statement::Loop(Loop {
+            kind: LoopKind::Sequential,
+            domain: LoopDomain {
+                variable: "once".into(),
+                start: IndexExpr::Constant(0),
+                stop: IndexExpr::Constant(1),
+                step: IndexExpr::Constant(1),
+            },
+            body: vec![Statement::Operation(first), Statement::Operation(second)],
+        }));
     } else {
-        branch.add_action([first]);
-        branch.add_action([second]);
+        branch.add_statement(crate::Statement::Operation(first));
+        branch.add_statement(crate::Statement::Operation(second));
     }
     branch.finalize("Y", output)
 }
@@ -131,7 +137,7 @@ fn canonicalizes_branch_insertion_order_and_uses_builtin_hash() {
 }
 
 #[test]
-fn hash_covers_storage_and_action_graph() {
+fn hash_covers_storage_and_statement_graph() {
     let split = manual_plan(false, false, Storage::Global, false).unwrap();
     let combined = manual_plan(false, false, Storage::Global, true).unwrap();
     let shared = manual_plan(false, false, Storage::Shared, true).unwrap();
@@ -143,7 +149,7 @@ fn hash_covers_storage_and_action_graph() {
 }
 
 #[test]
-fn finalization_rejects_boundary_and_cross_action_storage_errors() {
+fn finalization_rejects_boundary_and_cross_statement_storage_errors() {
     let mut duplicate =
         PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let input = duplicate.add_value(DType::Bf16, [1], Storage::External);
@@ -172,11 +178,11 @@ fn finalization_rejects_boundary_and_cross_action_storage_errors() {
         [output],
         OperationPayload::Compute(ComputeOperation::new(implementation())),
     );
-    crossing.add_action([first]);
-    crossing.add_action([second]);
+    crossing.add_statement(crate::Statement::Operation(first));
+    crossing.add_statement(crate::Statement::Operation(second));
     assert!(matches!(
         crossing.finalize("Y", output),
-        Err(PhysicalInvariantError::CrossActionStorage {
+        Err(PhysicalInvariantError::CrossStatementStorage {
             storage: Storage::Shared,
             ..
         })
@@ -184,26 +190,26 @@ fn finalization_rejects_boundary_and_cross_action_storage_errors() {
 }
 
 #[test]
-fn finalization_rejects_operation_cycles_and_missing_action_membership() {
+fn finalization_rejects_uninitialized_reads_and_missing_statement_membership() {
     let mut cyclic =
         PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let first_value = cyclic.add_value(DType::Bf16, [128, 128], Storage::External);
     let second_value = cyclic.add_value(DType::Bf16, [128, 128], Storage::Global);
     let first = cyclic.add_operation(
-        [second_value],
+        [second_value, second_value],
         [first_value],
         OperationPayload::Compute(ComputeOperation::new(implementation())),
     );
     let second = cyclic.add_operation(
-        [first_value],
+        [first_value, first_value],
         [second_value],
         OperationPayload::Compute(ComputeOperation::new(implementation())),
     );
-    cyclic.add_action([first]);
-    cyclic.add_action([second]);
+    cyclic.add_statement(crate::Statement::Operation(first));
+    cyclic.add_statement(crate::Statement::Operation(second));
     assert!(matches!(
         cyclic.finalize("Y", first_value),
-        Err(PhysicalInvariantError::OperationCycle)
+        Err(PhysicalInvariantError::MissingProducer { .. })
     ));
 
     let mut missing =
@@ -218,12 +224,12 @@ fn finalization_rejects_operation_cycles_and_missing_action_membership() {
     );
     assert!(matches!(
         missing.finalize("Y", output),
-        Err(PhysicalInvariantError::MissingActionMembership { .. })
+        Err(PhysicalInvariantError::MissingStatementMembership { .. })
     ));
 }
 
 #[test]
-fn finalization_rejects_duplicate_physical_operations() {
+fn separate_ordered_stores_can_repeat_the_same_computation() {
     let mut branch =
         PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
     let a = branch.add_value(DType::Bf16, [128, 128], Storage::External);
@@ -238,14 +244,13 @@ fn finalization_rejects_duplicate_physical_operations() {
     let first = branch.add_operation([a, b], [first_output], payload());
     let duplicate = branch.add_operation([a, b], [duplicate_output], payload());
     let consumer = branch.add_operation([first_output, b], [output], payload());
-    branch.add_action([first]);
-    branch.add_action([duplicate]);
-    branch.add_action([consumer]);
+    branch.add_statement(crate::Statement::Operation(first));
+    branch.add_statement(crate::Statement::Operation(duplicate));
+    branch.add_statement(crate::Statement::Operation(consumer));
 
-    assert!(matches!(
-        branch.finalize("Y", output),
-        Err(PhysicalInvariantError::DuplicateOperation { .. })
-    ));
+    let plan = branch.finalize("Y", output).unwrap();
+    assert_eq!(plan.operations().len(), 3);
+    assert_eq!(crate::emit(&plan).unwrap().execution().tasks_per_rank, 3);
 }
 
 #[test]

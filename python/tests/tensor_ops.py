@@ -27,7 +27,7 @@ class Builder:
         if not candidates:
             raise ValueError(f"no implementation for {definition.id}")
         operation = self.builder.add_operation(inputs, [output], candidates[0])
-        self.builder.add_action([operation])
+        self.builder.add_statement([operation])
         return output
 
     def pointwise(self, name, inputs, dtype, storage="global", **attributes):
@@ -103,6 +103,6 @@ def gather_sum_squares(world_size):
         "bf16", [[128, 128], [128, 128 * world_size]], 1, world_size
     )[0]
     op = b.builder.add_operation([x], [gathered], implementation)
-    b.builder.add_action([op])
+    b.builder.add_statement([op])
     square = b.pointwise("square", [gathered], "fp32")
     return b.finish(b.reduce(square, "external"))

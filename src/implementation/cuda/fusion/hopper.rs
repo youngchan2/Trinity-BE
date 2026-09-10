@@ -3,25 +3,19 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    Action, FusionError, FusionRewrite, FusionRule, Operation, OperationId, PhysicalPlan, Storage,
-    ValueInstanceId,
+    FusionError, FusionRewrite, FusionRule, Operation, OperationId, PhysicalPlan, Statement,
+    Storage, ValueInstanceId,
 };
 
-use super::hopper_wgmma::{FusionGemmShape, fusion_shape};
-use super::peer::{PEER_PULL_ID, PEER_PUSH_ID, supports_operation};
+use super::super::all_gather::peer::{PEER_PULL_ID, PEER_PUSH_ID, supports_operation};
+use super::super::gemm::hopper_wgmma::{FusionGemmShape, fusion_shape};
 
-pub(super) static RULES: &[&dyn FusionRule] = &[
-    &HopperFusionRule(Kind::Producer),
-    &HopperFusionRule(Kind::Consumer),
-    &HopperFusionRule(Kind::Computation),
-];
-
-enum Kind {
+pub(super) enum Kind {
     Producer,
     Consumer,
     Computation,
 }
-struct HopperFusionRule(Kind);
+pub(super) struct HopperFusionRule(pub(super) Kind);
 
 enum BodyOperation<'a> {
     Pull(&'a Operation),
@@ -53,8 +47,8 @@ impl FusionRule for HopperFusionRule {
     fn apply(
         &self,
         plan: &PhysicalPlan,
-        producer: &Action,
-        consumer: &Action,
+        producer: &Statement,
+        consumer: &Statement,
     ) -> Result<Vec<FusionRewrite>, FusionError> {
         let Some(left) = producer
             .operations()
@@ -99,9 +93,8 @@ impl FusionRule for HopperFusionRule {
         }
         let mut operations = producer
             .operations()
-            .iter()
+            .into_iter()
             .chain(consumer.operations())
-            .copied()
             .collect::<Vec<_>>();
         operations.sort_unstable();
         if operations.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -110,7 +103,9 @@ impl FusionRule for HopperFusionRule {
 
         let storages: &[Storage] = match self.0 {
             Kind::Consumer => &[Storage::Shared],
-            Kind::Producer | Kind::Computation => &[Storage::Shared, Storage::Register],
+            // The SS WGMMA backend consumes shared fragments. Register forwarding
+            // is available to pointwise consumers with the producer's traversal.
+            Kind::Producer | Kind::Computation => &[Storage::Shared],
         };
         Ok(storages
             .iter()
@@ -186,6 +181,11 @@ fn supports_body(
             value.storage()
         };
         if plan.output().value() == value_id
+            || plan
+                .operations()
+                .filter(|(_, op)| op.outputs().contains(&value_id))
+                .count()
+                != 1
             || plan
                 .inputs()
                 .iter()

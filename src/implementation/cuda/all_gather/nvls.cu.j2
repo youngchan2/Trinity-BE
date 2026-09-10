@@ -1,19 +1,18 @@
-template<class Runtime>
-__device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& tile_coord, void*, Runtime const& runtime) {
+{
   using Element = __nv_bfloat16;
 
   constexpr auto algorithm = nvshmemx::tile_coll_algo_t::NVLS_ONE_SHOT_PUSH_NBI;
 
-  constexpr int Rows = {% if axis == 0 %}{{ chunk }}{% else %}{{ source_rows }}{% endif %};
-  constexpr int Cols = {% if axis == 1 %}{{ chunk }}{% else %}{{ source_cols }}{% endif %};
+  constexpr std::int64_t Rows = {% if axis == 0 %}{{ chunk }}{% else %}{{ source_rows }}{% endif %};
+  constexpr std::int64_t Cols = {% if axis == 1 %}{{ chunk }}{% else %}{{ source_cols }}{% endif %};
 
   auto layout = nvshmemx::make_layout(
-      nvshmemx::make_shape(ConstInt<Rows>{}, ConstInt<Cols>{}),
-      nvshmemx::make_stride(ConstInt<{{ source_cols }}>{}, ConstInt<1>{}));
+      nvshmemx::make_shape(cuda::std::integral_constant<std::int64_t, Rows>{}, cuda::std::integral_constant<std::int64_t, Cols>{}),
+      nvshmemx::make_stride(cuda::std::integral_constant<std::int64_t, {{ source_cols }}>{}, cuda::std::integral_constant<std::int64_t, 1>{}));
 
   auto destination_layout = nvshmemx::make_layout(
-      nvshmemx::make_shape(ConstInt<Rows{% if axis == 0 %} * kWorld{% endif %}>{}, ConstInt<Cols{% if axis == 1 %} * kWorld{% endif %}>{}),
-      nvshmemx::make_stride(ConstInt<{{ target_cols }}>{}, ConstInt<1>{}));
+      nvshmemx::make_shape(cuda::std::integral_constant<std::int64_t, Rows{% if axis == 0 %} * kWorld{% endif %}>{}, cuda::std::integral_constant<std::int64_t, Cols{% if axis == 1 %} * kWorld{% endif %}>{}),
+      nvshmemx::make_stride(cuda::std::integral_constant<std::int64_t, {{ target_cols }}>{}, cuda::std::integral_constant<std::int64_t, 1>{}));
 
   auto* src = static_cast<Element*>(bindings.values[{{ input }}]) + std::size_t(tile_coord.x) * {% if axis == 0 %}{{ source_cols }}{% else %}1{% endif %};
 
@@ -23,13 +22,15 @@ __device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& 
   auto source_tensor = nvshmemx::Tensor(src, layout);
   auto destination_tensor = nvshmemx::Tensor(dst, destination_layout);
 
-  auto start = nvshmemx::make_shape(0, 0);
-  auto boundary = nvshmemx::make_shape(Rows, Cols);
+  // Each invocation copies a complete tile. Empty predicates select NVSHMEM's
+  // full-tile path, whose address arithmetic uses size_t throughout traversal.
+  auto start = nvshmemx::make_shape();
+  auto boundary = nvshmemx::make_shape();
 
   int status = nvshmemx::tile_allgather_block<decltype(source_tensor), decltype(destination_tensor), decltype(start), algorithm>(
       NVSHMEM_TEAM_WORLD, source_tensor, destination_tensor, start, boundary, 0);
   if (status == 0) status = nvshmemx::tile_collective_wait_block<algorithm>(NVSHMEM_TEAM_WORLD, 0);
   if (status != 0) runtime.fail(kCollectiveFailed);
 
-  return status == 0;
+  if (status != 0) return false;
 }

@@ -193,10 +193,13 @@ fn toy(collectives: bool) -> Execution {
                 (vec![], vec![vec![], vec![dependency(rank, 0)]], false)
             };
             tasks.push(Task {
+                argument: 0,
+                arguments: Default::default(),
                 rank,
                 slot,
-                action: slot,
-                operation: slot,
+                statement: slot,
+                task_set: slot,
+                body: slot,
                 coordinate: [0; 3],
                 shared_memory_bytes: 0,
                 dependencies,
@@ -209,6 +212,7 @@ fn toy(collectives: bool) -> Execution {
         }
     }
     Execution {
+        work: Vec::new(),
         tasks,
         tasks_per_rank: count,
         output_dependencies: (0..2)
@@ -294,6 +298,7 @@ fn generated_plans_complete_under_varied_dispatch_and_repeated_epochs() {
             plans.push(support::output_gather(backend, axis, 2));
         }
     }
+    plans.extend([1, 2, 4].into_iter().map(support::loop_ir::ffn));
     for plan in plans {
         let source = emit(&plan).unwrap();
         let execution = source.execution();

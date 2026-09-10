@@ -27,7 +27,7 @@ pub struct CudaRequirements {
 /// Allocation and launch-binding requirements for a device buffer.
 #[derive(Debug, Clone, Serialize)]
 pub struct BufferBindingRequirement {
-    /// Canonical value ID and index in the launch binding array.
+    /// Dense index in the launch binding array; local phase values have no slot.
     pub value: usize,
     pub input_names: Vec<String>,
     pub output_name: Option<String>,

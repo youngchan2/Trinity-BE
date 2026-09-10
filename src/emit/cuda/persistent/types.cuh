@@ -1,7 +1,7 @@
 struct Dependency { unsigned rank, slot; };
 struct Range { unsigned begin, count; };
 struct Task {
-  unsigned operation, slot, x, y, z;
+  unsigned body, slot, x, y, z;
   Range dependencies, stages;
 };
 enum PersistentError : int {

@@ -41,7 +41,6 @@ macro_rules! plan_id {
 
 plan_id!(ValueInstanceId);
 plan_id!(OperationId);
-plan_id!(ActionId);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct IdVec<I, T> {
@@ -77,9 +76,9 @@ impl<I, T> Default for IdVec<I, T> {
 
 /// The physical storage class of a concrete tensor value.
 ///
-/// ABI boundary values use [`Storage::External`]. Values passed between distinct
-/// actions must reside in [`Storage::External`] or [`Storage::Global`], while
-/// [`Storage::Shared`] and [`Storage::Register`] are local to one action.
+/// ABI boundary values use [`Storage::External`]. Values passed between separately
+/// scheduled tasks must reside in [`Storage::External`] or [`Storage::Global`],
+/// while [`Storage::Shared`] and [`Storage::Register`] are local to a CTA body.
 /// A value retains its rank-local tensor shape after promotion; execution
 /// concretization allocates storage for its live tile/panel, not that entire
 /// shape, and preserves the value's dtype at each operation boundary.
@@ -91,10 +90,10 @@ pub enum Storage {
     /// CUDA global memory used to materialize a non-boundary value.
     Global,
 
-    /// CUDA thread-block shared memory local to an action.
+    /// CUDA thread-block shared memory local to a CTA body.
     Shared,
 
-    /// CUDA register storage local to an action.
+    /// CUDA register storage local to a CTA body.
     Register,
 }
 
@@ -103,6 +102,7 @@ pub struct ValueInstance {
     pub(super) dtype: DType,
     pub(super) shape: Box<[usize]>,
     pub(super) storage: Storage,
+    pub(super) name: Option<String>,
 }
 
 impl ValueInstance {
@@ -115,6 +115,7 @@ impl ValueInstance {
             dtype,
             shape: shape.into_iter().collect(),
             storage,
+            name: None,
         }
     }
 
@@ -128,6 +129,10 @@ impl ValueInstance {
 
     pub fn storage(&self) -> Storage {
         self.storage
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 }
 
@@ -208,6 +213,8 @@ pub struct Operation {
     pub(super) inputs: Vec<ValueInstanceId>,
     pub(super) outputs: Vec<ValueInstanceId>,
     pub(super) payload: OperationPayload,
+    pub(super) expression: Option<super::Expression>,
+    pub(super) coordinates: Vec<super::IndexExpr>,
 }
 
 impl Operation {
@@ -220,6 +227,8 @@ impl Operation {
             inputs: inputs.into_iter().collect(),
             outputs: outputs.into_iter().collect(),
             payload,
+            expression: None,
+            coordinates: Vec::new(),
         }
     }
 
@@ -234,30 +243,36 @@ impl Operation {
     pub fn payload(&self) -> &OperationPayload {
         &self.payload
     }
+
+    pub(crate) fn coordinates(&self) -> &[super::IndexExpr] {
+        &self.coordinates
+    }
+
+    pub fn expression(&self) -> Option<&super::Expression> {
+        self.expression.as_ref()
+    }
 }
 
+/// One node in the ordered physical program, including nested loop statements.
+///
+/// CUDA lowering determines body and task boundaries from this structure; a
+/// statement does not itself define a kernel launch or one task.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Action {
-    pub(super) operations: Vec<OperationId>,
-    pub(super) inputs: Vec<ValueInstanceId>,
-    pub(super) outputs: Vec<ValueInstanceId>,
+pub enum Statement {
+    Loop(super::Loop),
+    Operation(OperationId),
 }
 
-impl Action {
-    pub fn operations(&self) -> &[OperationId] {
-        &self.operations
-    }
-
-    pub fn inputs(&self) -> &[ValueInstanceId] {
-        &self.inputs
-    }
-
-    pub fn outputs(&self) -> &[ValueInstanceId] {
-        &self.outputs
+impl Statement {
+    pub fn operations(&self) -> Vec<OperationId> {
+        match self {
+            Self::Operation(id) => vec![*id],
+            Self::Loop(loop_) => loop_.body.iter().flat_map(Self::operations).collect(),
+        }
     }
 }
 
-/// A validated, canonical physical graph that owns its tensor and ABI metadata.
+/// A validated, canonical physical program that owns its tensor and ABI metadata.
 ///
 /// Plans do not retain a logical source graph or depend on a compiler's lifetime.
 #[derive(Clone)]
@@ -267,7 +282,7 @@ pub struct PhysicalPlan {
     pub(super) inputs: Box<[TensorBinding]>,
     pub(super) value_instances: IdVec<ValueInstanceId, ValueInstance>,
     pub(super) operations: IdVec<OperationId, Operation>,
-    pub(super) actions: IdVec<ActionId, Action>,
+    pub(super) statements: Vec<Statement>,
     pub(super) output: TensorBinding,
     pub(super) hash: u64,
 }
@@ -307,12 +322,9 @@ impl PhysicalPlan {
         self.operations.iter()
     }
 
-    pub fn action(&self, id: ActionId) -> Option<&Action> {
-        self.actions.get(id)
-    }
-
-    pub fn actions(&self) -> impl ExactSizeIterator<Item = (ActionId, &Action)> {
-        self.actions.iter()
+    /// Returns the directly owned top-level statements in program order.
+    pub fn statements(&self) -> &[Statement] {
+        &self.statements
     }
 
     /// Returns a process-local compilation cache key, not a persistent identity.
@@ -327,7 +339,7 @@ impl PhysicalPlan {
             && self.inputs == other.inputs
             && self.value_instances == other.value_instances
             && self.operations == other.operations
-            && self.actions == other.actions
+            && self.statements == other.statements
             && self.output == other.output
     }
 }

@@ -7,9 +7,14 @@ pub struct CudaSource {
     pub(super) code: String,
     pub(super) requirements: CudaRequirements,
     pub(super) execution: Execution,
+    pub(super) bodies: Vec<super::Body>,
 }
 
 impl CudaSource {
+    pub fn bodies(&self) -> &[super::Body] {
+        &self.bodies
+    }
+
     pub fn code(&self) -> &str {
         &self.code
     }

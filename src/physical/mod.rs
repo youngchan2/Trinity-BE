@@ -2,16 +2,19 @@ mod builder;
 mod canonical;
 mod error;
 mod finalize;
+mod loops;
+pub(crate) mod normalize;
 mod plan;
 mod rewrite;
-
-pub(crate) use rewrite::rewrite_actions;
+pub(crate) use loops::accumulation_rhs;
+pub use loops::{Expression, IndexExpr, Loop, LoopDomain, LoopKind};
+pub(crate) use rewrite::rewrite_statements;
 
 pub use builder::PhysicalPlanBuilder;
 pub use error::PhysicalInvariantError;
 pub use plan::{
-    Action, ActionId, CommunicationKind, CommunicationOperation, ComputeOperation, Operation,
-    OperationId, OperationPayload, PhysicalPlan, Storage, TensorBinding, ValueInstance,
+    CommunicationKind, CommunicationOperation, ComputeOperation, Operation, OperationId,
+    OperationPayload, PhysicalPlan, Statement, Storage, TensorBinding, ValueInstance,
     ValueInstanceId,
 };
 

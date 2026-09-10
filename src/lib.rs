@@ -10,6 +10,7 @@ mod dtype;
 pub mod emit;
 mod fusion;
 mod implementation;
+mod loop_ir;
 mod physical;
 pub mod platform;
 mod python;
@@ -27,10 +28,12 @@ pub use implementation::{
     ReduceSumImplementation, all_gather_implementations, broadcast_implementations, fusion_rules,
     gemm_implementations, pointwise_implementations, reduce_sum_implementations,
 };
+pub use loop_ir::{LoopIrConfig, LoopIrError, lower_loop_ir};
 pub use physical::{
-    Action, ActionId, CommunicationKind, CommunicationOperation, ComputeOperation, Operation,
-    OperationId, OperationPayload, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder,
-    Storage, TensorBinding, ValueInstance, ValueInstanceId,
+    CommunicationKind, CommunicationOperation, ComputeOperation, Expression, IndexExpr, Loop,
+    LoopDomain, LoopKind, Operation, OperationId, OperationPayload, PhysicalInvariantError,
+    PhysicalPlan, PhysicalPlanBuilder, Statement, Storage, TensorBinding, ValueInstance,
+    ValueInstanceId,
 };
 pub use platform::{CudaTargetCapability, TargetCapability};
 

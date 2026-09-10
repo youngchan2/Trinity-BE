@@ -85,7 +85,7 @@ def test_builder_checks_and_metadata():
     b.bind_input("X", ids[0])
     b.bind_input("W", ids[1])
     op = b.add_operation(ids[:2], ids[2:], implementations[0])
-    b.add_action([op])
+    b.add_statement([op])
 
     assert "trinity_abi" in tl.emit(b.finalize("Y", ids[2])).code
     with pytest.raises(ValueError):
@@ -105,7 +105,7 @@ def test_all_gather_bindings_on_both_axes_and_world_validation():
             x, y = [builder.add_value("bf16", s, "external") for s in shapes]
             builder.bind_input("X", x)
             op = builder.add_operation([x], [y], instances[0])
-            builder.add_action([op])
+            builder.add_statement([op])
             req = tl.emit(builder.finalize("Y", y)).requirements
 
             assert req.world_size == 2 and req.workspace_symmetric

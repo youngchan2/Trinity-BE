@@ -16,6 +16,7 @@ all_gather_implementations = _compiler.all_gather_implementations
 pointwise_implementations = _compiler.pointwise_implementations
 reduce_sum_implementations = _compiler.reduce_sum_implementations
 broadcast_implementations = _compiler.broadcast_implementations
+lower_loop_ir = _compiler.lower_loop_ir
 
 
 class CudaSource:

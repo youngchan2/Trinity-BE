@@ -1,6 +1,6 @@
 __device__ bool dispatch(Context const& c, Task const& task, void* storage) {
-  switch (task.operation) {
-{% for launch in launches %}    case {{ launch.operation }}: return operation_{{ launch.operation }}(c.bindings, Tile{task.x, task.y, task.z}, storage, PersistentRuntime{c, task});
+  switch (task.body) {
+{% for body in bodies %}    case {{ loop.index0 }}: return operation_{{ loop.index0 }}(c.bindings, Tile{task.x, task.y, task.z}, storage, PersistentRuntime{c, task});
 {% endfor %}    default: fail(c, kInvalidLaunch); return false;
   }
 }

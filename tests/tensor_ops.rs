@@ -17,6 +17,9 @@ fn pointwise_candidates_validate_operands_and_immediates() {
             &[16, 4096],
             &[16, 16384],
             &[2, 257],
+            &[32768, 65536],
+            &[65536, 65536],
+            &[4294967424],
         ] {
             let shapes = vec![shape; count];
             for dtype in [DType::Bf16, DType::Fp32] {
@@ -100,6 +103,34 @@ fn reduction_and_broadcast_contracts() {
             .enumerate(DType::Fp32, [&[16], &[17, 4096]], 1)
             .is_empty()
     );
+}
+
+#[test]
+fn nvls_limits_tile_indices_without_limiting_full_tensor_size() {
+    let nvls = all_gather_implementations(TARGET)
+        .iter()
+        .find(|definition| definition.id().as_str() == "nvls.one_shot_push_nbi")
+        .unwrap();
+    for axis in [0, 1] {
+        let source = [65536, 65536];
+        let mut target = source;
+        target[axis] *= 2;
+        assert_eq!(
+            nvls.enumerate(DType::Bf16, [&source, &target], axis, 2)
+                .len(),
+            1
+        );
+    }
+    // Row strides and packed tile counts are still int in NVSHMEM 3.7.2.
+    for (source, target, axis) in [
+        ([128, 1usize << 30], [128, 1usize << 31], 1),
+        ([1usize << 26, 128], [1usize << 26, 256], 1),
+    ] {
+        assert!(
+            nvls.enumerate(DType::Bf16, [&source, &target], axis, 2)
+                .is_empty()
+        );
+    }
 }
 
 #[test]
@@ -187,12 +218,20 @@ fn normalization_dependencies_wait_for_complete_row_and_selected_statistic() {
     let reduce = operation("cuda.reduce_sum");
     let broadcast = operation("cuda.broadcast");
     for task in &source.execution().tasks {
-        if task.operation == reduce {
+        if plan.statements()[task.statement]
+            .operations()
+            .iter()
+            .any(|id| id.index() == reduce)
+        {
             assert_eq!(task.dependencies.len(), 3); // all three input chunks of this row
             assert!(task.stages.is_empty());
             assert_eq!(task.shared_memory_bytes, 512);
         }
-        if task.operation == broadcast {
+        if plan.statements()[task.statement]
+            .operations()
+            .iter()
+            .any(|id| id.index() == broadcast)
+        {
             assert_eq!(task.dependencies.len(), 1);
         }
         assert!(task.dependencies.iter().all(|d| d.rank == task.rank));
@@ -217,7 +256,7 @@ fn normalization_dependencies_wait_for_complete_row_and_selected_statistic() {
 }
 
 #[test]
-fn malformed_pointwise_and_reduction_plans_return_emit_errors() {
+fn malformed_pointwise_and_reduction_requests_fail_normalization() {
     let imp = pointwise_implementations(TARGET)[0]
         .enumerate(&[DType::Fp32; 3], &[&[16][..]; 3], None)
         .pop()
@@ -227,8 +266,8 @@ fn malformed_pointwise_and_reduction_plans_return_emit_errors() {
     let out = b.value(DType::Fp32, &[16], Storage::External);
     b.operation(&[x], out, imp);
     assert!(matches!(
-        emit(&b.finish(out)),
-        Err(EmitError::Unsupported(_))
+        b.plan.finalize("Y", out),
+        Err(PhysicalInvariantError::InvalidProgram(_))
     ));
 
     let imp = reduce_sum_implementations(TARGET)[0]
@@ -240,8 +279,8 @@ fn malformed_pointwise_and_reduction_plans_return_emit_errors() {
     let out = b.value(DType::Bf16, &[16], Storage::External);
     b.operation(&[x], out, imp);
     assert!(matches!(
-        emit(&b.finish(out)),
-        Err(EmitError::Unsupported(_))
+        b.plan.finalize("Y", out),
+        Err(PhysicalInvariantError::InvalidProgram(_))
     ));
 }
 
@@ -285,10 +324,10 @@ fn bf16_communication_backends_reject_fp32_and_vectors() {
                     implementation,
                 )),
             );
-            b.add_action([op]);
+            b.add_statement(trinity_lowering::Statement::Operation(op));
             assert!(matches!(
-                emit(&b.finalize("Y", y).unwrap()),
-                Err(EmitError::Unsupported(_))
+                b.finalize("Y", y),
+                Err(PhysicalInvariantError::InvalidProgram(_))
             ));
         }
     }

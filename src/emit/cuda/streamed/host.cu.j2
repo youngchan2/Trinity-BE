@@ -41,7 +41,7 @@ extern "C" int trinity_prepare(unsigned* maximum_workers, trinity::abi::ErrorInf
     return abi::report(error, abi::generated, kUnsupportedDevice, abi::prepare);
 
 {% for launch in launches %}
-  status = cudaFuncSetAttribute(kernel_{{ launch.operation }}, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
+  status = cudaFuncSetAttribute(kernel_{{ loop.index0 }}, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
   if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::configure);
 {% endfor %}
 
@@ -79,7 +79,7 @@ extern "C" int trinity_launch(trinity::generated::LaunchParams const* p, trinity
   bool submitted = false;
 
 {% for launch in launches %}{% if launch.count > 0 %}
-  kernel_{{ launch.operation }}<<<{{ launch.count }}, kThreads, kSharedBytes, stream>>>(bindings);
+  kernel_{{ loop.index0 }}<<<{{ launch.count }}, kThreads, kSharedBytes, stream>>>(bindings);
   submitted = true;
   {
     auto status = cudaGetLastError();

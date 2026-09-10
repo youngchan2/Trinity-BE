@@ -33,7 +33,7 @@ static __device__ constexpr Range kOutputDependencies[] = {
 {% endfor %}};
 
 static __device__ constexpr Task kTasks[] = {
-{% for t in tasks %}  { {{ t.operation }}, {{ t.slot }}, {{ t.x }}, {{ t.y }}, {{ t.z }}, { {{ t.dependencies.begin }}, {{ t.dependencies.count }} }, { {{ t.stages.begin }}, {{ t.stages.count }} } },
+{% for t in tasks %}  { {{ t.body }}, {{ t.slot }}, {{ t.x }}, {{ t.y }}, {{ t.z }}, { {{ t.dependencies.begin }}, {{ t.dependencies.count }} }, { {{ t.stages.begin }}, {{ t.stages.count }} } },
 {% else %}  {},
 {% endfor %}};
 

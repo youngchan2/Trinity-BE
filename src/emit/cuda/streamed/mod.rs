@@ -21,7 +21,11 @@ pub(super) fn program(
     // without task IDs or readiness tables.
     let context = Context {
         common: CommonContext::new(req, execution, bodies),
-        tiles: execution.tasks.iter().map(|task| task.coordinate).collect(),
+        tiles: execution
+            .tasks
+            .iter()
+            .map(|task| [task.argument, task.body, 0])
+            .collect(),
         types: include_str!("types.cuh"),
         runtime: include_str!("runtime.cuh"),
     };

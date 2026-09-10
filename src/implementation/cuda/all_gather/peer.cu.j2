@@ -1,12 +1,11 @@
-template<class Runtime>
-__device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& tile_coord, void*, Runtime const& runtime) {
+{
   using Element = cutlass::bfloat16_t;
 
 {% if push %}
   auto* src = static_cast<Element const*>(bindings.values[{{ input }}]);
 
-  int row = tile_coord.x + {% if axis == 0 %}runtime.rank() * {{ source_rows }}{% else %}0{% endif %};
-  int col = tile_coord.y + {% if axis == 1 %}runtime.rank() * {{ source_cols }}{% else %}0{% endif %};
+  std::int64_t row = tile_coord.x + {% if axis == 0 %}std::int64_t(runtime.rank()) * {{ source_rows }}{% else %}0{% endif %};
+  std::int64_t col = tile_coord.y + {% if axis == 1 %}std::int64_t(runtime.rank()) * {{ source_cols }}{% else %}0{% endif %};
 
   for (int peer = 0; peer < kWorld; ++peer) {
     auto* dst = static_cast<Element*>(runtime.peer_ptr(bindings.values[{{ output }}], peer));
@@ -17,13 +16,13 @@ __device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& 
           src[std::size_t(tile_coord.x + i / 64) * {{ source_cols }} + tile_coord.y + i % 64];
   }
 {% else %}
-  auto* src = static_cast<Element const*>(runtime.peer_ptr(bindings.values[{{ input }}], tile_coord.z));
+  auto* src = static_cast<Element const*>(runtime.peer_ptr(bindings.values[{{ input }}], (tile_coord.{{ "x" if axis == 0 else "y" }} / {{ source_rows if axis == 0 else source_cols }})));
   if (src == nullptr) { runtime.fail(kPeerUnavailable); return false; }
 
   auto* dst = static_cast<Element*>(bindings.values[{{ output }}]);
 
-  int row = tile_coord.x {% if axis == 0 %}% {{ source_rows }}{% endif %};
-  int col = tile_coord.y {% if axis == 1 %}% {{ source_cols }}{% endif %};
+  std::int64_t row = tile_coord.x {% if axis == 0 %}% {{ source_rows }}{% endif %};
+  std::int64_t col = tile_coord.y {% if axis == 1 %}% {{ source_cols }}{% endif %};
 
   for (int i = threadIdx.x; i < 64 * 64; i += blockDim.x)
     dst[std::size_t(tile_coord.x + i / 64) * {{ target_cols }} + tile_coord.y + i % 64] =
@@ -31,5 +30,5 @@ __device__ bool operation_{{ operation }}(Bindings const& bindings, Tile const& 
 {% endif %}
 
   // Worker publication follows a system fence from every writer in the CTA.
-  return true;
+
 }

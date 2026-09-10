@@ -4,6 +4,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 mod cuda;
+
 mod tensor;
 pub use tensor::{
     BroadcastImplementation, PointwiseImplementation, ReduceSumImplementation,
@@ -22,6 +23,15 @@ pub fn fusion_rules(target: TargetCapability) -> &'static [&'static dyn crate::F
 
 /// Enumerates concrete GEMM instances for an already resolved tensor presentation.
 pub trait GemmImplementation: ImplementationDefinition {
+    /// Match already scheduled operand tiles without replacing their schedule.
+    fn enumerate_scheduled(
+        &'static self,
+        _dtypes: [DType; 3],
+        _tiles: [&[usize]; 3],
+    ) -> Vec<ImplementationInstance> {
+        Vec::new()
+    }
+
     /// Returns no instances for unsupported dtype, rank, or tile extents.
     ///
     /// Callers must supply semantically valid shapes. Implementations may assert
@@ -166,5 +176,11 @@ impl Hash for ImplementationInstance {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id().hash(state);
         self.attributes.hash(state);
+    }
+}
+
+pub(crate) fn expression_instance(target: TargetCapability) -> ImplementationInstance {
+    match target {
+        TargetCapability::Cuda(target) => cuda::expression_instance(target),
     }
 }

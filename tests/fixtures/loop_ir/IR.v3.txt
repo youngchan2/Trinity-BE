@@ -1,0 +1,131 @@
+(seq
+  (ploop 0 4096 tile_n n
+    (sloop 0 4096 tile_k k
+      (store
+        (view (tensor attn_O1) (layout (axis a_0 16) (axis a_1 4096)))
+        (+
+          (load
+            (view (tensor attn_O1) (layout (axis a_0 16) (axis a_1 4096)))
+            (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n))))
+          (@
+            (load
+              (view (input O2) (layout (axis a_0 16) (axis a_1 4096)))
+              (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k))))
+            (load
+              (view (input WO) (layout (axis a_0 4096) (axis a_1 4096)))
+              (keyed_index (slot a_0 (tile k tile_k)) (slot a_1 (tile n tile_n))))))
+        (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n))))))
+  (seq
+    (ploop 0 4096 tile_n n
+      (store
+        (view (tensor attn_O2) (layout (axis a_0 16) (axis a_1 4096)))
+        (+
+          (load
+            (view (tensor attn_O1) (layout (axis a_0 16) (axis a_1 4096)))
+            (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n))))
+          (load
+            (view (input X) (layout (axis a_0 16) (axis a_1 4096)))
+            (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n)))))
+        (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n)))))
+    (seq
+      (sloop 0 4096 tile_k k
+        (store
+          (view (tensor attn_O3) (layout (axis a_0 16)))
+          (+
+            (load (view (tensor attn_O3) (layout (axis a_0 16))) (keyed_index (slot a_0 fulltile)))
+            (rsum
+              (sqr
+                (load
+                  (view (tensor attn_O2) (layout (axis a_0 16) (axis a_1 4096)))
+                  (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k)))))
+              1))
+          (keyed_index (slot a_0 fulltile))))
+      (seq
+        (ploop 0 4096 tile_k k
+          (store
+            (view (tensor attn_O_norm) (layout (axis a_0 16) (axis a_1 4096)))
+            (/
+              (load
+                (view (tensor attn_O2) (layout (axis a_0 16) (axis a_1 4096)))
+                (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k))))
+              (bcast
+                (sqrt
+                  (/
+                    (load (view (tensor attn_O3) (layout (axis a_0 16))) (keyed_index (slot a_0 fulltile)))
+                    4096))
+                1))
+            (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k)))))
+        (seq
+          (ploop 0 16384 tile_p p
+            (seq
+              (sloop 0 4096 tile_k k
+                (store
+                  (view (tensor FF1a) (layout (axis a_0 16) (axis a_1 16384)))
+                  (+
+                    (load
+                      (view (tensor FF1a) (layout (axis a_0 16) (axis a_1 16384)))
+                      (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))
+                    (@
+                      (load
+                        (view (tensor attn_O_norm) (layout (axis a_0 16) (axis a_1 4096)))
+                        (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k))))
+                      (load
+                        (view (input WFF1a) (layout (axis a_0 4096) (axis a_1 16384)))
+                        (keyed_index (slot a_0 (tile k tile_k)) (slot a_1 (tile p tile_p))))))
+                  (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p)))))
+              (sloop 0 4096 tile_k k
+                (store
+                  (view (tensor FF1b) (layout (axis a_0 16) (axis a_1 16384)))
+                  (+
+                    (load
+                      (view (tensor FF1b) (layout (axis a_0 16) (axis a_1 16384)))
+                      (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))
+                    (@
+                      (load
+                        (view (tensor attn_O_norm) (layout (axis a_0 16) (axis a_1 4096)))
+                        (keyed_index (slot a_0 fulltile) (slot a_1 (tile k tile_k))))
+                      (load
+                        (view (input WFF1b) (layout (axis a_0 4096) (axis a_1 16384)))
+                        (keyed_index (slot a_0 (tile k tile_k)) (slot a_1 (tile p tile_p))))))
+                  (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p)))))))
+          (seq
+            (ploop 0 16384 tile_p p
+              (store
+                (view (tensor FF1b_silu) (layout (axis a_0 16) (axis a_1 16384)))
+                (*
+                  (load
+                    (view (tensor FF1b) (layout (axis a_0 16) (axis a_1 16384)))
+                    (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))
+                  (sigmoid
+                    (load
+                      (view (tensor FF1b) (layout (axis a_0 16) (axis a_1 16384)))
+                      (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))))
+                (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p)))))
+            (seq
+              (ploop 0 16384 tile_p p
+                (store
+                  (view (tensor FF1) (layout (axis a_0 16) (axis a_1 16384)))
+                  (*
+                    (load
+                      (view (tensor FF1a) (layout (axis a_0 16) (axis a_1 16384)))
+                      (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))
+                    (load
+                      (view (tensor FF1b_silu) (layout (axis a_0 16) (axis a_1 16384)))
+                      (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p)))))
+                  (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p)))))
+              (ploop 0 4096 tile_n n
+                (sloop 0 16384 tile_p p
+                  (store
+                    (view (output FF2) (layout (axis a_0 16) (axis a_1 4096)))
+                    (+
+                      (load
+                        (view (output FF2) (layout (axis a_0 16) (axis a_1 4096)))
+                        (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n))))
+                      (@
+                        (load
+                          (view (tensor FF1) (layout (axis a_0 16) (axis a_1 16384)))
+                          (keyed_index (slot a_0 fulltile) (slot a_1 (tile p tile_p))))
+                        (load
+                          (view (input WFF2) (layout (axis a_0 16384) (axis a_1 4096)))
+                          (keyed_index (slot a_0 (tile p tile_p)) (slot a_1 (tile n tile_n))))))
+                    (keyed_index (slot a_0 fulltile) (slot a_1 (tile n tile_n)))))))))))))

@@ -8,9 +8,10 @@ struct Range {
     begin: usize,
     count: usize,
 }
+
 #[derive(Serialize)]
 struct RenderTask {
-    operation: usize,
+    body: usize,
     slot: usize,
     x: usize,
     y: usize,
@@ -18,6 +19,7 @@ struct RenderTask {
     dependencies: Range,
     stages: Range,
 }
+
 #[derive(Serialize)]
 struct Context<'a> {
     #[serde(flatten)]
@@ -49,6 +51,7 @@ pub(super) fn program(
         dependencies.extend_from_slice(values);
         result
     };
+
     let mut stages = Vec::new();
     let mut tasks = Vec::new();
     for task in &execution.tasks {
@@ -56,22 +59,25 @@ pub(super) fn program(
             begin: stages.len(),
             count: task.stages.len(),
         };
+
         stages.extend(task.stages.iter().map(|s| range(&s.dependencies)));
         tasks.push(RenderTask {
-            operation: task.operation,
+            body: task.body,
             slot: task.slot,
-            x: task.coordinate[0],
-            y: task.coordinate[1],
-            z: task.coordinate[2],
+            x: task.argument,
+            y: 0,
+            z: 0,
             dependencies: range(&task.dependencies),
             stages: stage_range,
         });
     }
+
     let outputs = execution
         .output_dependencies
         .iter()
         .map(|d| range(d))
         .collect();
+
     let context = Context {
         world: req.world_size,
         common: CommonContext::new(req, execution, bodies),
@@ -86,6 +92,7 @@ pub(super) fn program(
         types: include_str!("types.cuh"),
         runtime: include_str!("runtime.cuh"),
     };
+
     render(
         &[
             ("program", include_str!("program.cu.j2")),
