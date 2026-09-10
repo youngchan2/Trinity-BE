@@ -1,7 +1,21 @@
 # trinity-lowering
 
-Build concrete tensor program plans, compile them into CUDA artifacts, and run
-them with PyTorch Tensors.
+Generate Triton kernels from extracted, scheduled Trinity IR, or lower scheduled
+Loop IR and concrete tensor plans into CUDA artifacts that run with PyTorch Tensors.
+
+The two source-generation entry points are available in the same crate:
+
+| Input | Entry point | Result |
+| --- | --- | --- |
+| Trinity IR with named views, keyed indices, split loops, and expression-valued bounds | `triton::compile(text, options)` | Python source containing Triton kernels and `forward(...)` |
+| Scheduled Loop IR with concrete symbol and dtype bindings | `lower_loop_ir(text, config)` then `emit(plan)` | CUDA source and execution metadata |
+| Concrete implementation instances and tensor bindings | `PhysicalPlanBuilder` then `emit(plan)` | CUDA source and execution metadata |
+
+Triton uses `analysis::ProgramAnalysis` and `triton::ProgramPlan`; CUDA uses the
+Loop IR reader and `PhysicalPlan`. These are separate lowering contracts. There
+is no automatic conversion between the plans or cross-backend implementation
+selection yet. The Triton path currently stores tensors as FP16; the CUDA path
+uses explicit dtypes and its Hopper WGMMA implementation accepts BF16.
 
 Rust handles implementation selection, physical plan validation, CUDA emission,
 and compilation. The Python API binds Tensors to a C++ runtime that owns native
@@ -27,6 +41,11 @@ sources, examples, and tests live under `python/`.
 
 | Location | Purpose |
 | --- | --- |
+| [src/analysis](src/analysis/) | Trinity IR parsing, ordered accesses, lexical scopes, and dependency queries |
+| [src/triton/plan.rs](src/triton/plan.rs) | Triton program and per-kernel plans |
+| [src/triton/lowering](src/triton/lowering/) | Triton storage, initialization, indexing, and launch planning |
+| [src/triton/codegen](src/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
+| [src/loop_ir.rs](src/loop_ir.rs) | Scheduled Loop IR reader and CUDA implementation binding |
 | [src/physical](src/physical/) | Physical plan construction and validation |
 | [src/implementation](src/implementation/) | Concrete operation implementations |
 | [src/emit/cuda](src/emit/cuda/) | CUDA source generation and host ABI |
@@ -57,11 +76,33 @@ uv run --no-sync cargo test -p trinity-lowering --locked
 uv run --no-sync pytest
 ```
 
-The default tests do not require a GPU. Generated-kernel execution tests require
-Hopper hardware; multi-GPU integration tests additionally require NVLink and
-NVSHMEM.
+The default tests do not require a GPU. CUDA generated-kernel execution tests
+require Hopper hardware; multi-GPU integration tests additionally require NVLink
+and NVSHMEM.
+Python Loop IR source tests use the checked-in FFN fixtures. Their optional GPU
+benchmark tests additionally require an enclosing workspace's
+`examples/ffn_v3/run.py`; they skip explicitly when that harness is unavailable.
 
-## Unified lowering
+## Triton source generation
+
+Use `triton::compile(text, options)` or `analysis::analyze_text(text)` followed by
+`triton::lower(analysis, options)` and `ProgramPlan::emit()`. The IR's computation
+graph and loop schedule are preserved. Managed mode allocates intermediate
+tensors and returns outputs; it is enabled automatically for programs with `mloop`.
+See [the Triton emitter guide](docs/TRITON_EMITTER.md) for the analysis and plan contract.
+
+```sh
+cargo test --locked --test batched_mla_emit -- --nocapture
+```
+
+These tests read the checked-in stage 14/16/20 fixtures and write `stage14.py`,
+`stage16.py`, and `stage20.py` under `target/tests/batched_mla/`. They check Python
+syntax, kernel counts, and the launch wrapper. Python 3 is required; PyTorch,
+Triton, and a GPU are not used. These are source-generation checks, not numerical
+or performance tests. `generated_kernels/` and `reference_kernels/` remain ignored
+artifacts.
+
+## CUDA unified lowering
 
 Candidate and Builder operations are normalized into the same ordered Loop/Statement
 program as `lower_loop_ir`. Compute operations have tile expressions; communication

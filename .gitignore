@@ -7,3 +7,5 @@ dist/
 __pycache__/
 *.so
 *.egg-info/
+/generated_kernels/
+/reference_kernels/

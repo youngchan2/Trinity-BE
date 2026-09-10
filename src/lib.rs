@@ -1,9 +1,10 @@
-//! Concrete CUDA implementation candidates and physical tensor program plans.
+//! Scheduled Trinity IR analysis, Triton source generation, and CUDA physical plans.
 //!
-//! Callers resolve logical semantics and tensor presentations, enumerate applicable
-//! implementations, and assemble a graph with [`PhysicalPlanBuilder`]. Finalized
-//! plans own their physical data and do not retain a compiler's source graph.
+//! [`triton::compile`] emits Python kernels from Trinity IR. [`lower_loop_ir`] and
+//! [`PhysicalPlanBuilder`] produce CUDA plans for [`emit`] and [`compile`]. These
+//! entry points retain their own analysis and lowering contracts.
 
+pub mod analysis;
 pub mod compile;
 mod config;
 mod dtype;
@@ -14,6 +15,7 @@ mod loop_ir;
 mod physical;
 pub mod platform;
 mod python;
+pub mod triton;
 
 pub use compile::{
     CompileConfig, CompileDiagnostics, CompileError, CudaArtifact, compile, compile_with_config,
