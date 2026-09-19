@@ -1,0 +1,403 @@
+{
+  "source": {
+    "repository": "https://github.com/kaist-ina/Trinity",
+    "branch": "jhpark/optimizer",
+    "commit": "e9b4468be0284cd57e957c0f4d39b09ca259a653",
+    "fixture": "optimizer/tests/ffn.rs::llama_extract_ffn_expressions",
+    "migration": "Preserve computation/shapes; classify the fixture loops, make tile width explicit, wrap references in identity views, convert positional indices to keyed slots."
+  },
+  "extraction": {
+    "baseline": {
+      "nodes": 699,
+      "store_targets": [
+        "FF1",
+        "FF1a",
+        "FF1b",
+        "FF1b_silu",
+        "FF2",
+        "attn_O1",
+        "attn_O2",
+        "attn_O3",
+        "attn_O_norm"
+      ]
+    },
+    "egraph": {
+      "classes": 172,
+      "nodes": 176
+    },
+    "fused": {
+      "nodes": 694,
+      "store_targets": [
+        "FF1",
+        "FF1a",
+        "FF1b",
+        "FF1b_silu",
+        "FF2",
+        "attn_O1",
+        "attn_O2",
+        "attn_O3",
+        "attn_O_norm"
+      ]
+    },
+    "method": "Production rules applied at explicitly selected sites; AST-size extraction, with a penalty on the original attn_O1 sloop for the Split-K sample. Not performance ranking or exhaustive enumeration.",
+    "postprocess": "postprocess_v2 with empty tile equivalence sets; no force_scope_fix",
+    "rules": [
+      {
+        "applications": 1,
+        "name": "ploop-fusion-unified-tail",
+        "site": "FF1a then FF1b"
+      },
+      {
+        "applications": 1,
+        "name": "sloop-to-mloop-split-k-add",
+        "site": "attn_O1"
+      }
+    ],
+    "split_k": {
+      "nodes": 761,
+      "store_targets": [
+        "FF1",
+        "FF1a",
+        "FF1b",
+        "FF1b_silu",
+        "FF2",
+        "__split_fdba4cffaeb51ebe",
+        "attn_O1",
+        "attn_O2",
+        "attn_O3",
+        "attn_O_norm"
+      ]
+    }
+  },
+  "tensor_shapes": {
+    "O2": [
+      16,
+      4096
+    ],
+    "WO": [
+      4096,
+      4096
+    ],
+    "attn_O1": [
+      16,
+      4096
+    ],
+    "X": [
+      16,
+      4096
+    ],
+    "attn_O2": [
+      16,
+      4096
+    ],
+    "attn_O3": [
+      16
+    ],
+    "attn_O_norm": [
+      16,
+      4096
+    ],
+    "WFF1a": [
+      4096,
+      16384
+    ],
+    "WFF1b": [
+      4096,
+      16384
+    ],
+    "FF1a": [
+      16,
+      16384
+    ],
+    "FF1b": [
+      16,
+      16384
+    ],
+    "FF1b_silu": [
+      16,
+      16384
+    ],
+    "FF1": [
+      16,
+      16384
+    ],
+    "FF2": [
+      16,
+      4096
+    ],
+    "WFF2": [
+      16384,
+      4096
+    ]
+  },
+  "example_bindings": {
+    "tile_k": 64,
+    "tile_n": 128,
+    "tile_p": 128,
+    "__nsplit_fdba4cffaeb51ebe": 4
+  },
+  "binding_constraints": "Positive tiles dividing their loop extents; num_split * tile_k divides 4096. Bindings are a starting configuration, not measured tuning results.",
+  "precision": {
+    "inputs_and_materialized_outputs": "BF16 except attn_O3",
+    "accumulation": "zero-initialized FP32 across the whole serial reduction; BF16 conversion on completion",
+    "normalization_sum_and_expression_temporaries": "FP32",
+    "split_k_scratch": "FP32; reduce all splits before BF16 conversion",
+    "normalization_epsilon": 0,
+    "note": "Explicit interpretation agreed for CUDA lowering; dtype/init are not encoded in TileLang text."
+  },
+  "files": {
+    "IR.v3.source.txt": {
+      "sha256": "41a9e6c7d75a046c9fe85e1993defa33c0197f4c54e096df91ecb36a744d7d3e",
+      "tensor_shapes": {
+        "attn_O1": [
+          "16",
+          "4096"
+        ],
+        "O2": [
+          "16",
+          "4096"
+        ],
+        "WO": [
+          "4096",
+          "4096"
+        ],
+        "attn_O2": [
+          "16",
+          "4096"
+        ],
+        "X": [
+          "16",
+          "4096"
+        ],
+        "attn_O3": [
+          "16"
+        ],
+        "attn_O_norm": [
+          "16",
+          "4096"
+        ],
+        "FF1a": [
+          "16",
+          "16384"
+        ],
+        "WFF1a": [
+          "4096",
+          "16384"
+        ],
+        "FF1b": [
+          "16",
+          "16384"
+        ],
+        "WFF1b": [
+          "4096",
+          "16384"
+        ],
+        "FF1b_silu": [
+          "16",
+          "16384"
+        ],
+        "FF1": [
+          "16",
+          "16384"
+        ],
+        "FF2": [
+          "16",
+          "4096"
+        ],
+        "WFF2": [
+          "16384",
+          "4096"
+        ]
+      },
+      "loop_counts": {
+        "ploop": 8,
+        "sloop": 5,
+        "mloop": 0
+      }
+    },
+    "IR.v3.txt": {
+      "sha256": "eeacd9cee7a939630a331c52a0355f1e40f5751ea211bc31cc656708a32709fd",
+      "tensor_shapes": {
+        "attn_O1": [
+          "16",
+          "4096"
+        ],
+        "O2": [
+          "16",
+          "4096"
+        ],
+        "WO": [
+          "4096",
+          "4096"
+        ],
+        "attn_O2": [
+          "16",
+          "4096"
+        ],
+        "X": [
+          "16",
+          "4096"
+        ],
+        "attn_O3": [
+          "16"
+        ],
+        "attn_O_norm": [
+          "16",
+          "4096"
+        ],
+        "FF1a": [
+          "16",
+          "16384"
+        ],
+        "WFF1a": [
+          "4096",
+          "16384"
+        ],
+        "FF1b": [
+          "16",
+          "16384"
+        ],
+        "WFF1b": [
+          "4096",
+          "16384"
+        ],
+        "FF1b_silu": [
+          "16",
+          "16384"
+        ],
+        "FF1": [
+          "16",
+          "16384"
+        ],
+        "FF2": [
+          "16",
+          "4096"
+        ],
+        "WFF2": [
+          "16384",
+          "4096"
+        ]
+      },
+      "loop_counts": {
+        "ploop": 7,
+        "sloop": 5,
+        "mloop": 0
+      }
+    },
+    "IR.v3.split_k.txt": {
+      "sha256": "bc5801ad59ed5cff182aa3aa2cd037018bf1fc6b26342a593a00f9c2d4cc3765",
+      "tensor_shapes": {
+        "__split_fdba4cffaeb51ebe": [
+          "__nsplit_fdba4cffaeb51ebe",
+          "16",
+          "4096"
+        ],
+        "O2": [
+          "16",
+          "4096"
+        ],
+        "WO": [
+          "4096",
+          "4096"
+        ],
+        "attn_O1": [
+          "16",
+          "4096"
+        ],
+        "attn_O2": [
+          "16",
+          "4096"
+        ],
+        "X": [
+          "16",
+          "4096"
+        ],
+        "attn_O3": [
+          "16"
+        ],
+        "attn_O_norm": [
+          "16",
+          "4096"
+        ],
+        "FF1a": [
+          "16",
+          "16384"
+        ],
+        "WFF1a": [
+          "4096",
+          "16384"
+        ],
+        "FF1b": [
+          "16",
+          "16384"
+        ],
+        "WFF1b": [
+          "4096",
+          "16384"
+        ],
+        "FF1b_silu": [
+          "16",
+          "16384"
+        ],
+        "FF1": [
+          "16",
+          "16384"
+        ],
+        "FF2": [
+          "16",
+          "4096"
+        ],
+        "WFF2": [
+          "16384",
+          "4096"
+        ]
+      },
+      "loop_counts": {
+        "ploop": 7,
+        "sloop": 4,
+        "mloop": 1
+      }
+    }
+  },
+  "validation": {
+    "rust_parser": true,
+    "backend_parser_and_desugar": true,
+    "scope_and_named_axes": true,
+    "cpu": {
+      "kind": "CPU interpreter on reduced shapes M=2,K=N=8,P=16; FP32 accumulation and BF16 materialization, FP32 Split-K scratch. Not GPU validation.",
+      "case_count": 72,
+      "max_abs_error": 0.0
+    },
+    "seeds": [
+      0,
+      7,
+      42
+    ],
+    "reduced_shapes": {
+      "M": 2,
+      "K_and_N": 8,
+      "P": 16
+    },
+    "tile_cases": [
+      {
+        "tile_k": 2,
+        "tile_n": 4,
+        "tile_p": 4
+      },
+      {
+        "tile_k": 1,
+        "tile_n": 2,
+        "tile_p": 2
+      }
+    ],
+    "split_counts": [
+      1,
+      2,
+      4
+    ],
+    "cuda_compiled": false,
+    "gpu_executed": false,
+    "optimizer_tests_executed": false
+  },
+  "reproduce": "python3 examples/ffn_v3/generate.py --optimizer-repo trinity-old"
+}

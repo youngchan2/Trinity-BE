@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
-use crate::{CudaSource, CudaTargetCapability};
+use crate::{AsStr, CudaSource, CudaTargetCapability};
 pub use artifact::CudaArtifact;
 pub use config::CompileConfig;
 pub use error::{CompileDiagnostics, CompileError};
@@ -32,7 +32,7 @@ pub fn compile_with_config(
     }
 
     let requirements = source.requirements();
-    if requirements.target != CudaTargetCapability::Hopper || requirements.cuda_arch != "sm_90a" {
+    if requirements.target != CudaTargetCapability::Hopper {
         return Err(CompileError::Configuration(
             "unsupported CUDA target".into(),
         ));
@@ -72,7 +72,7 @@ pub fn compile_with_config(
     write(&input, source.code())?;
     write(&exports, EXPORTS)?;
 
-    let arguments = arguments(&toolchain, &input, &artifact, &exports);
+    let arguments = arguments(&toolchain, requirements.target, &input, &artifact, &exports);
     let diagnostics = invoke(&toolchain.compiler, arguments, source.code())?;
 
     if !artifact.is_file() {
@@ -170,6 +170,7 @@ fn invoke(
 
 fn arguments(
     toolchain: &config::Toolchain,
+    target: CudaTargetCapability,
     input: &Path,
     artifact: &Path,
     exports: &Path,
@@ -178,7 +179,7 @@ fn arguments(
         "--shared",
         "--std=c++17",
         "-O3",
-        "-arch=sm_90a",
+        &format!("-arch={}", target.as_str()),
         "--expt-relaxed-constexpr",
         "-Xcompiler=-fPIC",
         "--cudart=shared",

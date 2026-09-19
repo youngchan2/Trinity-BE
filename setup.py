@@ -23,7 +23,7 @@ if os.environ.get("TRINITY_BUILD_CUDA", "0") == "1":
     if CUDA_HOME is None:
         raise RuntimeError("native build requires a CUDA Toolkit; set CUDA_HOME")
 
-    include_dirs = [str(root / "src/native"), str(root / "src/emit/cuda")]
+    include_dirs = [str(root / "src/native")]
     defines = []
 
     if nvshmem := os.environ.get("NVSHMEM_HOME"):

@@ -51,6 +51,12 @@ int main(int argc,char** argv) {
   BufferSpec vector_spec{0,64,16,{16},{1},"fp32",false};
   TensorView vector_view{1024,64,{16},{1},"fp32",0,true,false};
   validate_tensor(vector_spec,vector_view,0);
+
+  BufferSpec scratch_spec{1,4*16*128*4,16,{4,16,128},{16*128,128,1},"fp32",false};
+  TensorView scratch_view{4096,4*16*128*4,{4,16,128},{16*128,128,1},"fp32",0,true,false};
+  validate_tensor(scratch_spec,scratch_view,0);
+  auto strided_scratch=scratch_view; strided_scratch.strides={128,4*128,1};
+  try { validate_tensor(scratch_spec,strided_scratch,0);assert(false); } catch(std::invalid_argument const&) {}
   auto rejects=[&](BufferSpec const& s,TensorView const& t) {
     try { validate_tensor(s,t,0);assert(false); } catch(std::invalid_argument const&) {}
   };

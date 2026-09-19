@@ -1,12 +1,19 @@
 """Physical-plan fixtures for primitive tensor and distributed operation tests."""
 
+import struct
+import sys
+from pathlib import Path
 import trinity_lowering as tl
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
+from plan_syntax import all_gather, index, load, store
 
 
 class Builder:
     def __init__(self, world_size=1):
         self.builder = tl.PhysicalPlanBuilder(world_size)
         self.values = []
+        self.statements = []
 
     def value(self, dtype, shape, storage):
         value = self.builder.add_value(dtype, list(shape), storage)
@@ -18,27 +25,57 @@ class Builder:
         self.builder.bind_input(name, value)
         return value
 
-    def operation(self, definition, inputs, dtype, shape, storage="global", **attributes):
+    def operation(self, name, inflows, dtype, shape, storage="global", **attributes):
         output = self.value(dtype, shape, storage)
-        operands = [self.values[v] for v in [*inputs, output]]
-        candidates = definition.enumerate(
-            [v[0] for v in operands], [v[1] for v in operands], **attributes
-        )
-        if not candidates:
-            raise ValueError(f"no implementation for {definition.id}")
-        operation = self.builder.add_operation(inputs, [output], candidates[0])
-        self.builder.add_action([operation])
+        if name == "reduce_sum":
+            access = index("(tile row 1)")
+            value = load(inflows[0], self.values[inflows[0]][1], index("(tile row 1)", "fulltile"))
+            rhs = f"(rsum {value} 1)"
+        else:
+            parts = (
+                ["(clipped_tile col 128)"]
+                if len(shape) == 1
+                else ["(tile row 1)", "(clipped_tile col 128)"]
+            )
+            access = index(*parts)
+            if name == "broadcast":
+                rhs = (
+                    f"(bcast {load(inflows[0], self.values[inflows[0]][1], index('(tile row 1)'))} 1)"
+                )
+            else:
+                args = [load(v, self.values[v][1], access) for v in inflows]
+                if name == "scalar_div":
+                    bits = struct.unpack("I", struct.pack("f", attributes["scalar"]))[0]
+                    args.append(f"(float_bits {bits})")
+                operator = {
+                    "add": "+",
+                    "mul": "*",
+                    "div": "/",
+                    "scalar_div": "/",
+                    "square": "sqr",
+                }.get(name, name)
+                rhs = f"({operator} {' '.join(args)})"
+        body = store(output, shape, rhs, access)
+        node = self.builder.add_operation(inflows, [output], expression=body)
+        if name == "reduce_sum":
+            node = self.builder.add_loop("parallel", "row", 0, shape[0], 1, [node])
+        else:
+            node = self.builder.add_loop(
+                "parallel", "col", 0, ((shape[-1] + 127) // 128) * 128, 128, [node]
+            )
+            if len(shape) == 2:
+                node = self.builder.add_loop("parallel", "row", 0, shape[0], 1, [node])
+        self.statements.append(node)
         return output
 
-    def pointwise(self, name, inputs, dtype, storage="global", **attributes):
-        definition = next(d for d in tl.pointwise_implementations() if d.id == f"cuda.{name}")
+    def pointwise(self, name, inflows, dtype, storage="global", **attributes):
         return self.operation(
-            definition, inputs, dtype, self.values[inputs[0]][1], storage, **attributes
+            name, inflows, dtype, self.values[inflows[0]][1], storage, **attributes
         )
 
     def reduce(self, value, storage="global"):
         return self.operation(
-            tl.reduce_sum_implementations()[0],
+            "reduce_sum",
             [value],
             "fp32",
             self.values[value][1][:1],
@@ -49,7 +86,7 @@ class Builder:
     def broadcast(self, value, columns, storage="global"):
         dtype, shape = self.values[value]
         return self.operation(
-            tl.broadcast_implementations()[0],
+            "broadcast",
             [value],
             dtype,
             [shape[0], columns],
@@ -58,7 +95,7 @@ class Builder:
         )
 
     def finish(self, output):
-        return self.builder.finalize("Y", output)
+        return self.builder.build(self.statements, "Y", output)
 
 
 def pointwise(name, shape, dtypes, world_size=1, **attributes):
@@ -98,11 +135,11 @@ def gather_sum_squares(world_size):
     b = Builder(world_size)
     x = b.input("X", "bf16", [128, 128])
     gathered = b.value("bf16", [128, 128 * world_size], "global")
-    definition = next(d for d in tl.all_gather_implementations() if d.id.endswith("peer_pull"))
-    implementation = definition.enumerate(
-        "bf16", [[128, 128], [128, 128 * world_size]], 1, world_size
-    )[0]
-    op = b.builder.add_operation([x], [gathered], implementation)
-    b.builder.add_action([op])
+    access = index("(tile row 64)", "(tile col 64)")
+    body = all_gather(x, [128, 128], access, gathered, [128, 128 * world_size], access, 1)
+    op = b.builder.add_operation([x], [gathered], expression=body)
+    col = b.builder.add_loop("parallel", "col", 0, 128, 64, [op])
+    row = b.builder.add_loop("parallel", "row", 0, 128, 64, [col])
+    b.statements.append(row)
     square = b.pointwise("square", [gathered], "fp32")
     return b.finish(b.reduce(square, "external"))

@@ -10,8 +10,6 @@ def test_native_core_without_cuda(tmp_path):
         "-pthread",
         "-I",
         str(root.parent / "src/native"),
-        "-I",
-        str(root.parent / "src/emit/cuda"),
     ]
     libs = []
     for name, defines in [

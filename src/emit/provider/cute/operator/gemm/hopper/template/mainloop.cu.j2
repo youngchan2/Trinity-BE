@@ -1,0 +1,49 @@
+  {
+    // This pipeline is local to one logical K access, including its final drain.
+    auto load_stage = [&](int64_t offset, int stage) {
+      const int64_t k = ({{ k_origin }}) + offset;
+      for (int linear = threadIdx.x * 8; linear < 128 * 64; linear += 128 * 8) {
+        const int row = linear / 64, column = linear % 64;
+        const bool valid = row < {{ rows }} && ({{ valid_row }});
+        const auto* source = ({{ lhs }}) + (valid ? ({{ prefix }}_m + row) * int64_t({{ lhs_stride }}) + k + column : 0);
+        const unsigned destination = static_cast<unsigned>(__cvta_generic_to_shared(&{{ prefix }}_sa(row, column, stage)));
+        const int bytes = valid ? 16 : 0;
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 16, %2;"
+                     :: "r"(destination), "l"(source), "r"(bytes) : "memory");
+      }
+      for (int linear = threadIdx.x * 8; linear < 128 * 64; linear += 128 * 8) {
+        const int row = linear / 128, column = linear % 128;
+        const auto* source = ({{ rhs }}) + (k + row) * int64_t({{ rhs_stride }}) + {{ prefix }}_n + column;
+        const unsigned destination = static_cast<unsigned>(__cvta_generic_to_shared(&{{ prefix }}_sb(column, row, stage)));
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 16;"
+                     :: "r"(destination), "l"(source) : "memory");
+      }
+      cute::cp_async_fence();
+    };
+
+    load_stage(0, 0);
+    int stage = 0;
+    for (int64_t offset = 0; offset < int64_t({{ k_width }}); offset += 64) {
+      cute::cp_async_wait<0>();
+      __syncthreads();
+      asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+      // The other stage was released by every reader before it is reused.
+      // Do not prefetch past this logical access, even when another sloop iteration follows.
+      if (offset + 64 < int64_t({{ k_width }})) {
+        load_stage(offset + 64, stage ^ 1);
+      }
+      auto a = {{ prefix }}_thread.make_fragment_A({{ prefix }}_thread.partition_A({{ prefix }}_sa(cute::_, cute::_, stage)));
+      auto b = {{ prefix }}_thread.make_fragment_B({{ prefix }}_thread.partition_B({{ prefix }}_sb(cute::_, cute::_, stage)));
+      cute::warpgroup_fence_operand({{ prefix }}_accumulator);
+      cute::warpgroup_arrive();
+      cute::gemm({{ prefix }}_mma, a, b, {{ prefix }}_accumulator);
+      cute::warpgroup_commit_batch();
+      cute::warpgroup_wait<0>();
+      cute::warpgroup_fence_operand({{ prefix }}_accumulator);
+      // Every reader must finish before this shared stage can be overwritten.
+      __syncthreads();
+      stage ^= 1;
+    }
+    cute::cp_async_wait<0>();
+    __syncthreads();
+  }

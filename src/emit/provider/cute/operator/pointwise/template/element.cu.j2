@@ -1,0 +1,8 @@
+{
+{% for input in inputs %}
+  const float {{ prefix }}_load{{ loop.index0 }} = static_cast<float>({{ input }});
+{% endfor %}
+{% for expression in expressions %}
+  const float {{ expression.name }} = {{ expression.value }};
+{% endfor %}
+  const {{ output_type }} {{ prefix }}_result = static_cast<{{ output_type }}>({{ result }});

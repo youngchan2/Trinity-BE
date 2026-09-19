@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emit 처리 경로</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box} body{margin:0;padding:32px;background:#f5f5f5;color:#2d3142;font-family:'Geist','Noto Sans KR',sans-serif}
+main{max-width:1520px;margin:auto} .eyebrow{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.14em;color:#4f5d75}
+h1{font-family:'Instrument Serif','Noto Serif KR',serif;font-size:28px;font-weight:400;margin:8px 0 16px}
+figure{margin:0;overflow-x:auto} svg{display:block;width:100%;min-width:1100px}
+figcaption{font-size:12px;line-height:1.8;color:#4f5d75;margin-top:16px}
+</style>
+</head>
+<body><main>
+<p class="eyebrow">TRINITY LOWERING / ARCHITECTURE</p>
+<h1>Emission pipeline</h1>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 488" role="img" aria-labelledby="trinity-lowering-emission-title trinity-lowering-emission-desc">
+<title id="trinity-lowering-emission-title">Emit 처리 경로</title>
+<desc id="trinity-lowering-emission-desc">PhysicalPlan의 공통 정보를 준비하고 실행 계획을 구성한 뒤, KernelProviders에 Operation과 Loop를 전달해 구현 후보와 요구사항을 수집하고, combine에서 후보를 결합·검증하여 성능을 추정한 결과로 커널을 선택하고 Provider의 원시 커널 본문을 CUDA render에 전달하여 플랫폼별 코드를 생성하는 경로를 보여준다.</desc>
+<defs>
+<marker id="trinity-lowering-emission-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker>
+<marker id="trinity-lowering-emission-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#eb6c36"/></marker>
+<marker id="trinity-lowering-emission-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"/></marker>
+<style>
+.name{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:12px;font-weight:600;fill:#2d3142}
+.note{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:12px;font-weight:400;fill:#4f5d75}
+.tag{font-family:'Geist Mono',monospace;font-size:9px;fill:#7a8399}
+</style></defs>
+<rect x="0" y="0" width="1520" height="488" fill="#f5f5f5" stroke="none"/>
+<rect x="344" y="104" width="216" height="312" fill="#2d3142" stroke="#bfc0c0" fill-opacity="0.02" stroke-width="0.8"/>
+<text class="tag" x="360" y="128" text-anchor="start">02  EXECUTION PLAN</text>
+<rect x="352" y="136" width="200" height="196" fill="#f5f5f5" stroke="#bfc0c0" stroke-width="0.8"/>
+<text class="tag" x="364" y="156" text-anchor="start">CUDA</text>
+<path d="M 160 288 H 184" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 328 264 H 332 Q 340 264 340 256 V 208 Q 340 200 348 200 H 360" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 328 288 H 360" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 328 312 H 332 Q 340 312 340 320 V 364 Q 340 372 348 372 H 360" fill="none" stroke="#7a8399" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 544 200 H 560 Q 568 200 568 208 V 264 Q 568 272 576 272 H 584" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 544 288 H 584" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 544 372 H 552 Q 560 372 560 364 V 312 Q 560 304 568 304 H 584" fill="none" stroke="#7a8399" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 616 244 V 116 Q 616 108 624 108 H 828" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 904 152 V 204 Q 904 212 896 212 H 704 Q 696 212 696 220 V 244" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 728 288 H 760" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 920 288 H 952" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 1096 272 H 1104 Q 1112 272 1112 264 Q 1112 256 1120 256 H 1136" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 1096 304 H 1108 Q 1116 304 1116 312 V 364 Q 1116 372 1124 372 H 1136" fill="none" stroke="#7a8399" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 1280 256 H 1320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path d="M 1280 372 H 1320" fill="none" stroke="#7a8399" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<path data-edge="provider-body-to-render" d="M 1052 108 H 1200 Q 1208 108 1208 116 V 212" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-emission-arrow)"/>
+<rect x="1064" y="76" width="160" height="24" fill="#f5f5f5" stroke="none"/>
+<text class="note" x="1144" y="92" text-anchor="middle">원시 커널</text>
+<rect x="648" y="60" width="144" height="40" fill="#f5f5f5" stroke="none"/>
+<text class="note" x="656" y="76" text-anchor="start">Operation</text>
+<text class="note" x="656" y="96" text-anchor="start">Loop</text>
+<rect x="736" y="184" width="152" height="20" fill="#f5f5f5" stroke="none"/>
+<text class="note" x="744" y="196" text-anchor="start">구현 후보</text>
+<g data-node="providers">
+<rect x="852" y="40" width="200" height="88" fill="#ececec" stroke="#7a8399"/>
+<rect x="840" y="52" width="200" height="88" fill="#ffffff" stroke="#7a8399"/>
+<rect x="828" y="64" width="200" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="928" y="112" text-anchor="middle">KernelProviders</text>
+</g>
+<text class="tag" x="184" y="224" text-anchor="start">01  PREPARE</text>
+<text class="tag" x="584" y="356" text-anchor="start">03  COLLECT</text>
+<text class="tag" x="760" y="356" text-anchor="start">04  COMBINE</text>
+<text class="tag" x="952" y="356" text-anchor="start">05  SELECT</text>
+<text class="tag" x="1136" y="192" text-anchor="start">06  RENDER</text>
+<g data-node="plan">
+<rect x="40" y="244" width="120" height="88" fill="#ececec" stroke="#7a8399"/>
+<text class="name" x="100.0" y="292" text-anchor="middle">PhysicalPlan</text>
+</g>
+<g data-node="prepare">
+<rect x="184" y="244" width="144" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="256.0" y="280" text-anchor="middle">prepare</text>
+<text class="note" x="256.0" y="304" text-anchor="middle">공통 정보 준비</text>
+</g>
+<g data-node="streamed">
+<rect x="360" y="168" width="184" height="64" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="452.0" y="192" text-anchor="middle">CudaStreamed</text>
+<text class="note" x="452.0" y="216" text-anchor="middle">단일 GPU</text>
+</g>
+<g data-node="persistent">
+<rect x="360" y="256" width="184" height="64" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="452.0" y="280" text-anchor="middle">CudaPersistent</text>
+<text class="note" x="452.0" y="304" text-anchor="middle">다중 GPU</text>
+</g>
+<g data-extension="platforms">
+<rect x="360" y="344" width="184" height="56" fill="#f5f5f5" stroke="#7a8399" stroke-dasharray="4,3"/>
+<text class="name" x="452.0" y="376" text-anchor="middle">AMD / …</text>
+</g>
+<g data-node="collect">
+<rect x="584" y="244" width="144" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="656.0" y="280" text-anchor="middle">collect</text>
+<text class="note" x="656.0" y="304" text-anchor="middle">구현 후보 수집</text>
+</g>
+<g data-node="combine">
+<rect x="760" y="244" width="160" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="840" y="280" text-anchor="middle">combine</text>
+<text class="note" x="840" y="304" text-anchor="middle">후보 결합 · 성능 추정</text>
+</g>
+<g data-node="select">
+<rect x="952" y="244" width="144" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="1024.0" y="280" text-anchor="middle">select</text>
+<text class="note" x="1024.0" y="304" text-anchor="middle">추정 성능 기반 선택</text>
+</g>
+<g data-node="cuda-render">
+<rect x="1136" y="212" width="144" height="88" fill="#ffffff" stroke="#2d3142"/>
+<text class="name" x="1208.0" y="248" text-anchor="middle">CUDA render</text>
+<text class="note" x="1208.0" y="272" text-anchor="middle">CUDA 코드 생성</text>
+</g>
+<g data-node="cuda-source">
+<rect x="1320" y="212" width="160" height="88" fill="#ececec" stroke="#7a8399"/>
+<text class="name" x="1400.0" y="260" text-anchor="middle">CudaSource</text>
+</g>
+<g data-extension="platform-render">
+<rect x="1136" y="340" width="144" height="64" fill="#f5f5f5" stroke="#7a8399" stroke-dasharray="4,3"/>
+<text class="name" x="1208.0" y="364" text-anchor="middle">AMD / … render</text>
+<text class="note" x="1208.0" y="388" text-anchor="middle">플랫폼별 코드 생성</text>
+</g>
+<g data-extension="platform-source">
+<rect x="1320" y="340" width="160" height="64" fill="#ececec" stroke="#7a8399" stroke-dasharray="4,3"/>
+<text class="name" x="1400.0" y="376" text-anchor="middle">플랫폼별 출력</text>
+</g>
+<line x1="40" y1="440" x2="1480" y2="440" stroke="#bfc0c0" stroke-width="0.8"/>
+<rect x="40" y="460" width="12" height="12" fill="#ececec" stroke="#2d3142"/>
+<text class="note" x="64" y="471" text-anchor="start">입출력</text>
+<rect x="200" y="460" width="12" height="12" fill="#ffffff" stroke="#2d3142"/>
+<text class="note" x="224" y="471" text-anchor="start">처리 단계</text>
+<rect x="388" y="460" width="12" height="12" fill="#f5f5f5" stroke="#7a8399" stroke-dasharray="4,3"/>
+<text class="note" x="412" y="471" text-anchor="start">추후 확장</text>
+</svg>
+<figcaption>실행 계획을 구성한 뒤 구현 후보를 수집하고, 결합 결과의 추정 성능을 바탕으로 커널을 선택합니다. KernelProviders는 Operation과 Loop를 받아 구현별 요구사항을 반환하고, 원시 커널 본문을 CUDA render에 전달합니다.<br>렌더링과 출력은 플랫폼별로 분리합니다. 외부 글꼴을 불러올 수 없는 환경에서는 로컬 대체 글꼴을 사용합니다.</figcaption>
+</figure></main></body></html>

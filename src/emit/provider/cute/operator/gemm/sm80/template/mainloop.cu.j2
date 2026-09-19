@@ -1,0 +1,44 @@
+  {
+    // This pipeline is local to one logical K access, including its final drain.
+    auto load_stage = [&](int64_t offset, int stage) {
+      const int64_t k = ({{ k_origin }}) + offset;
+      for (int linear = threadIdx.x * 8; linear < 128 * 32; linear += 128 * 8) {
+        const int row = linear / 32, column = linear % 32;
+        const bool valid = row < {{ rows }} && ({{ valid_row }});
+        const auto* source = ({{ lhs }}) + (valid ? ({{ prefix }}_m + row) * int64_t({{ lhs_stride }}) + k + column : 0);
+        const unsigned destination = static_cast<unsigned>(__cvta_generic_to_shared(&{{ prefix }}_sa(row, column, stage)));
+        const int bytes = valid ? 16 : 0;
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 16, %2;"
+                     :: "r"(destination), "l"(source), "r"(bytes) : "memory");
+      }
+      for (int linear = threadIdx.x * 8; linear < 128 * 32; linear += 128 * 8) {
+        const int row = linear / 128, column = linear % 128;
+        const auto* source = ({{ rhs }}) + (k + row) * int64_t({{ rhs_stride }}) + {{ prefix }}_n + column;
+        const unsigned destination = static_cast<unsigned>(__cvta_generic_to_shared(&{{ prefix }}_sb(column, row, stage)));
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 16;"
+                     :: "r"(destination), "l"(source) : "memory");
+      }
+      cute::cp_async_fence();
+    };
+
+    load_stage(0, 0);
+    int stage = 0;
+    for (int64_t offset = 0; offset < int64_t({{ k_width }}); offset += 32) {
+      cute::cp_async_wait<0>();
+      __syncthreads();
+      // The other stage was released by every reader before it is reused.
+      // Do not prefetch past this logical access, even when another sloop iteration follows.
+      if (offset + 32 < int64_t({{ k_width }})) {
+        load_stage(offset + 32, stage ^ 1);
+      }
+      cute::copy({{ prefix }}_copy_a,
+          {{ prefix }}_source_a(cute::_, cute::_, cute::_, stage), {{ prefix }}_register_a);
+      cute::copy({{ prefix }}_copy_b,
+          {{ prefix }}_source_b(cute::_, cute::_, cute::_, stage), {{ prefix }}_register_b);
+      cute::gemm({{ prefix }}_mma, {{ prefix }}_ra, {{ prefix }}_rb, {{ prefix }}_accumulator);
+      __syncthreads();
+      stage ^= 1;
+    }
+    cute::cp_async_wait<0>();
+    __syncthreads();
+  }

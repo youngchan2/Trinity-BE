@@ -1,0 +1,21 @@
+{% for axis in axes %}
+  const int64_t {{ prefix }}_origin{{ loop.index0 }} = {{ axis.origin }};
+{% endfor %}
+  const auto {{ prefix }}_origin = cute::make_coord({% for axis in axes %}{{ prefix }}_origin{{ loop.index0 }}{% if not loop.last %}, {% endif %}{% endfor %});
+  const auto {{ prefix }}_shape = cute::make_shape({% for axis in axes %}int64_t({{ axis.width }}){% if not loop.last %}, {% endif %}{% endfor %});
+  const auto {{ prefix }}_tile_shape = cute::make_shape({{ tile_shape }});
+  const auto {{ prefix }}_thread_layout = cute::make_layout(cute::make_shape({{ thread_shape }}));
+
+{% for tensor in tensors %}
+  auto {{ tensor.name }} = cute::make_tensor(
+      cute::make_gmem_ptr(({{ tensor.pointer }})),
+      cute::make_layout(cute::make_shape({{ tensor.shape }}),
+                        cute::make_stride({{ tensor.strides }})));
+  auto {{ tensor.name }}_offset = cute::domain_offset({{ prefix }}_origin, {{ tensor.name }});
+  auto {{ tensor.name }}_window = cute::make_tensor(
+      {{ tensor.name }}_offset.data(),
+      cute::make_layout({{ prefix }}_shape, cute::stride({{ tensor.name }})));
+{% endfor %}
+  auto {{ prefix }}_coordinates = cute::make_identity_tensor({{ prefix }}_shape);
+  const auto {{ prefix }}_tiles = cute::size<1>(
+      cute::zipped_divide({{ prefix }}_coordinates, {{ prefix }}_tile_shape));

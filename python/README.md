@@ -3,6 +3,34 @@
 Build concrete tensor program plans, compile them into CUDA artifacts, and run
 them with PyTorch Tensors.
 
+## Explicit program construction
+
+The emitter is being rebuilt: `emit()` currently raises `NotImplementedError`.
+The execution walkthrough below describes the functionality to restore.
+
+`PhysicalPlanBuilder` no longer expands whole-tensor operations automatically:
+
+- `add_value(dtype, shape, storage, name=...)` assigns the name used in expressions.
+  Without `name`, values are named `v0`, `v1`, etc. ABI aliases are set by `bind_input`.
+- `add_operation(inflows, outflows, expression="(store ...)")` registers an explicit
+  body and returns a statement ID. The expression is required for both computation
+  and communication. Implementations are selected by Emit, not passed to the Builder.
+- `add_loop(kind, variable, start, stop, step, body)` registers an explicit loop
+  over child statement IDs and returns another statement ID. Bounds accept integers
+  or index expressions such as `"i"` and `"(+ i 128)"`; kinds are `parallel`/`sequential`.
+- `build([root, ...], output_name, output)` takes roots in execution order,
+  normalizes names/operands, validates and canonicalizes. Include a child only
+  through its parent; operation membership must be unique.
+  It never creates missing loops, chooses tiles, or supplies a missing compute body.
+
+See [plans.py](examples/plans.py) for explicit GEMM, bias, ReLU and communication
+loops. `lower_ir` continues to preserve the input program's loop structure.
+`metadata_json()` includes each root's operations and nested `loop` kind/domain/body.
+Recognized reductions start at zero; Emit supplies the initialization. Builder
+all-gather uses `(all_gather source_view source_index destination_view destination_index axis)`.
+Its destination index addresses rank zero's region; source rank `r` adds
+`r * source_shape[axis]` on the gather axis. Textual communication IR is not supported.
+
 ## Getting started
 
 This walkthrough runs a BF16 matrix multiplication with bias addition on one Hopper GPU.
