@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1792 1120" role="img" aria-labelledby="trinity-lowering-kernel-phases-model-title trinity-lowering-kernel-phases-model-desc">
+<title id="trinity-lowering-kernel-phases-model-title">Fused expression: Matmul, Add, Softmax kernel composition</title>
+<desc id="trinity-lowering-kernel-phases-model-desc">이미 fusion된 softmax(A @ B + bias) 식을 파란 Matmul, 주황 Add, 초록 Softmax Kernel에 대응시킨 설계 예시. 각 Kernel은 prologue, 선택적인 mainloop, epilogue 코드 조각을 제공한다. combine은 같은 행 타일 Scope에 준비 코드를 배치하고 K 반복에는 Matmul mainloop를 넣는다. 반복 후 Matmul 결과 x를 Add 입력에, Add 결과 z를 Softmax 입력에 연결해 하나의 코드 본문을 구성한다. Softmax의 행 최댓값, 지수, 행 합계, 정규화는 Softmax Kernel 내부 구현이다.</desc>
+<defs>
+<style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');</style>
+<marker id="trinity-lowering-kernel-phases-model-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#7a8399"/></marker>
+<marker id="trinity-lowering-kernel-phases-model-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#cd8051"/></marker>
+<marker id="trinity-lowering-kernel-phases-model-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#6b86ac"/></marker>
+<marker id="trinity-lowering-kernel-phases-model-arrow-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#7c9882"/></marker>
+<style>
+.heading,.name,.note,.small{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;fill:#2d3142}
+.heading{font-size:20px;font-weight:600}.name{font-size:16px;font-weight:600}.note{font-size:14px;fill:#4f5d75}.small{font-size:12px;fill:#4f5d75}
+.code,.comment{font-family:'Geist Mono',monospace;font-size:13px;fill:#2d3142;white-space:pre}
+.comment{fill:#708096}.ir{font-family:'Geist Mono',monospace;font-size:15px;fill:#2d3142;white-space:pre}
+</style></defs>
+<rect x="0" y="0" width="1792" height="1120" rx="4" fill="#f5f5f5" stroke="none"/>
+<text x="40" y="48" class="heading" text-anchor="start" xml:space="preserve">PhysicalPlan</text>
+<text x="40" y="76" class="small" text-anchor="start" xml:space="preserve">fused IR · 개념 표기</text>
+<text x="496" y="48" class="heading" text-anchor="start" xml:space="preserve">KernelProvider</text>
+<text x="496" y="76" class="small" text-anchor="start" xml:space="preserve">연산자별 Kernel · Native 코드 조각</text>
+<text x="1128" y="48" class="heading" text-anchor="start" xml:space="preserve">combine</text>
+<text x="1128" y="76" class="small" text-anchor="start" xml:space="preserve">공유 타일 Scope · CUDA 의사코드</text>
+<rect x="40" y="104" width="376" height="984" rx="4" fill="#fff" stroke="#bfc0c0"/>
+<rect x="496" y="104" width="424" height="984" rx="4" fill="#ececec" stroke="#7a8399"/>
+<rect x="1128" y="104" width="624" height="984" rx="4" fill="#fff" stroke="#bfc0c0"/>
+<text x="64" y="144" class="code" text-anchor="start" xml:space="preserve">Y = softmax(A @ B + bias)</text>
+<text x="64" y="204" class="ir" text-anchor="start" xml:space="preserve">(ploop 0 M 16 m</text>
+<text x="64" y="238" class="ir" text-anchor="start" xml:space="preserve">  (store Y_m</text>
+<rect x="72" y="260" width="320" height="328" rx="4" fill="#eaf1eb" stroke="#8aa28f" data-kernel="softmax"/>
+<text x="88" y="292" class="ir" text-anchor="start" xml:space="preserve">(softmax :axis n</text>
+<rect x="88" y="312" width="288" height="228" rx="4" fill="#fff0e5" stroke="#d99870" data-kernel="add"/>
+<text x="104" y="344" class="ir" text-anchor="start" xml:space="preserve">(+</text>
+<rect x="104" y="364" width="256" height="100" rx="4" fill="#eef2f8" stroke="#8da3c0" data-kernel="matmul"/>
+<text x="120" y="400" class="ir" text-anchor="start" xml:space="preserve">(@ (load A_m)</text>
+<text x="120" y="432" class="ir" text-anchor="start" xml:space="preserve">   (load B))</text>
+<text x="104" y="506" class="ir" text-anchor="start" xml:space="preserve">  (load bias))</text>
+<text x="88" y="566" class="ir" text-anchor="start" xml:space="preserve">)</text>
+<text x="64" y="624" class="ir" text-anchor="start" xml:space="preserve">  ))</text>
+<line x1="56" y1="674" x2="400" y2="674" stroke="#bfc0c0"/>
+<text x="64" y="716" class="code" text-anchor="start" xml:space="preserve">A_m  = A[m:m+16, 0:K]</text>
+<text x="64" y="746" class="code" text-anchor="start" xml:space="preserve">B    = B[0:K, 0:N]</text>
+<text x="64" y="776" class="code" text-anchor="start" xml:space="preserve">bias = bias[0:N]</text>
+<text x="64" y="806" class="code" text-anchor="start" xml:space="preserve">Y_m  = Y[m:m+16, 0:N]</text>
+<text x="64" y="880" class="small" text-anchor="start" xml:space="preserve">N = 128 · 한 행 전체를 같은 CTA에 배치</text>
+<text x="64" y="910" class="note" text-anchor="start" xml:space="preserve">중간 타일: FP32 · Register</text>
+<text x="64" y="940" class="note" text-anchor="start" xml:space="preserve">softmax 축: n</text>
+<text x="520" y="136" class="name" text-anchor="start" xml:space="preserve">Native Kernels</text>
+<rect x="512" y="160" width="392" height="256" rx="4" fill="#eef2f8" stroke="#8da3c0" data-kernel="matmul"/>
+<text x="528" y="192" class="name" text-anchor="start" xml:space="preserve">Matmul Kernel</text>
+<text x="888" y="192" class="code" text-anchor="end" xml:space="preserve">@</text>
+<text x="528" y="224" class="note" text-anchor="start" xml:space="preserve">prologue</text>
+<text x="528" y="250" class="code" text-anchor="start" xml:space="preserve">auto acc = zeros&lt;16, N&gt;();</text>
+<text x="528" y="288" class="note" text-anchor="start" xml:space="preserve">mainloop</text>
+<text x="528" y="314" class="code" text-anchor="start" xml:space="preserve">mma_and_wait(acc, A_mk, B_kn);</text>
+<text x="528" y="352" class="note" text-anchor="start" xml:space="preserve">epilogue</text>
+<text x="528" y="378" class="code" text-anchor="start" xml:space="preserve">auto out = result_tile(acc);</text>
+<rect x="512" y="440" width="392" height="232" rx="4" fill="#fff0e5" stroke="#d99870" data-kernel="add"/>
+<text x="528" y="472" class="name" text-anchor="start" xml:space="preserve">Add Kernel</text>
+<text x="888" y="472" class="code" text-anchor="end" xml:space="preserve">+</text>
+<text x="528" y="504" class="note" text-anchor="start" xml:space="preserve">prologue</text>
+<text x="528" y="530" class="code" text-anchor="start" xml:space="preserve">auto b = load_tile(bias);</text>
+<text x="528" y="568" class="note" text-anchor="start" xml:space="preserve">mainloop</text>
+<text x="632" y="568" class="code" text-anchor="start" xml:space="preserve">None</text>
+<text x="528" y="608" class="note" text-anchor="start" xml:space="preserve">epilogue</text>
+<text x="528" y="634" class="code" text-anchor="start" xml:space="preserve">auto out = input + b;</text>
+<rect x="512" y="696" width="392" height="368" rx="4" fill="#eaf1eb" stroke="#8aa28f" data-kernel="softmax"/>
+<text x="528" y="728" class="name" text-anchor="start" xml:space="preserve">Softmax Kernel</text>
+<text x="888" y="728" class="code" text-anchor="end" xml:space="preserve">softmax</text>
+<text x="528" y="760" class="note" text-anchor="start" xml:space="preserve">prologue</text>
+<text x="528" y="786" class="code" text-anchor="start" xml:space="preserve">auto rows = prepare_row_reduce();</text>
+<text x="528" y="826" class="note" text-anchor="start" xml:space="preserve">mainloop</text>
+<text x="632" y="826" class="code" text-anchor="start" xml:space="preserve">None</text>
+<text x="528" y="866" class="note" text-anchor="start" xml:space="preserve">epilogue</text>
+<text x="528" y="896" class="code" text-anchor="start" xml:space="preserve">auto hi = row_max(rows, input);</text>
+<text x="528" y="924" class="code" text-anchor="start" xml:space="preserve">auto e = exp(input - hi);</text>
+<text x="528" y="952" class="code" text-anchor="start" xml:space="preserve">auto sum = row_sum(rows, e);</text>
+<text x="528" y="980" class="code" text-anchor="start" xml:space="preserve">auto out = e / sum;</text>
+<rect x="1164" y="158" width="564" height="62" rx="4" fill="#eef2f8" stroke="none" data-kernel="matmul"/>
+<rect x="1164" y="248" width="564" height="62" rx="4" fill="#fff0e5" stroke="none" data-kernel="add"/>
+<rect x="1164" y="338" width="564" height="62" rx="4" fill="#eaf1eb" stroke="none" data-kernel="softmax"/>
+<rect x="1180" y="458" width="548" height="62" rx="4" fill="#eef2f8" stroke="none" data-kernel="matmul"/>
+<rect x="1164" y="578" width="564" height="62" rx="4" fill="#eef2f8" stroke="none" data-kernel="matmul"/>
+<rect x="1164" y="668" width="564" height="62" rx="4" fill="#fff0e5" stroke="none" data-kernel="add"/>
+<rect x="1164" y="758" width="564" height="152" rx="4" fill="#eaf1eb" stroke="none" data-kernel="softmax"/>
+<text x="1152" y="148" class="code" text-anchor="start" xml:space="preserve">for (auto m : row_tiles(M, 16)) {</text>
+<text x="1152" y="178" class="comment" text-anchor="start" xml:space="preserve">  // Matmul.prologue</text>
+<text x="1152" y="208" class="code" text-anchor="start" xml:space="preserve">  auto acc = zeros&lt;16, N&gt;();</text>
+<text x="1152" y="238" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="268" class="comment" text-anchor="start" xml:space="preserve">  // Add.prologue</text>
+<text x="1152" y="298" class="code" text-anchor="start" xml:space="preserve">  auto b = load_tile(bias);</text>
+<text x="1152" y="328" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="358" class="comment" text-anchor="start" xml:space="preserve">  // Softmax.prologue</text>
+<text x="1152" y="388" class="code" text-anchor="start" xml:space="preserve">  auto rows = prepare_row_reduce();</text>
+<text x="1152" y="418" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="448" class="code" text-anchor="start" xml:space="preserve">  for (int k = 0; k &lt; K; k += 64) {</text>
+<text x="1152" y="478" class="comment" text-anchor="start" xml:space="preserve">    // Matmul.mainloop</text>
+<text x="1152" y="508" class="code" text-anchor="start" xml:space="preserve">    mma_and_wait(acc, A_mk, B_kn);</text>
+<text x="1152" y="538" class="code" text-anchor="start" xml:space="preserve">  }</text>
+<text x="1152" y="568" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="598" class="comment" text-anchor="start" xml:space="preserve">  // Matmul.epilogue</text>
+<text x="1152" y="628" class="code" text-anchor="start" xml:space="preserve">  auto x = result_tile(acc);</text>
+<text x="1152" y="658" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="688" class="comment" text-anchor="start" xml:space="preserve">  // Add.epilogue</text>
+<text x="1152" y="718" class="code" text-anchor="start" xml:space="preserve">  auto z = x + b;</text>
+<text x="1152" y="748" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="778" class="comment" text-anchor="start" xml:space="preserve">  // Softmax.epilogue</text>
+<text x="1152" y="808" class="code" text-anchor="start" xml:space="preserve">  auto hi = row_max(rows, z);</text>
+<text x="1152" y="838" class="code" text-anchor="start" xml:space="preserve">  auto e = exp(z - hi);</text>
+<text x="1152" y="868" class="code" text-anchor="start" xml:space="preserve">  auto sum = row_sum(rows, e);</text>
+<text x="1152" y="898" class="code" text-anchor="start" xml:space="preserve">  auto y = e / sum;</text>
+<text x="1152" y="928" class="code" text-anchor="start" xml:space="preserve"></text>
+<text x="1152" y="958" class="code" text-anchor="start" xml:space="preserve">  store_tile(Y_m, bf16(y));</text>
+<text x="1152" y="988" class="code" text-anchor="start" xml:space="preserve">}</text>
+<line data-phase-separator="true" x1="1144" y1="420" x2="1736" y2="420" stroke="#bfc0c0" stroke-width="1"/>
+<line data-phase-separator="true" x1="1144" y1="558" x2="1736" y2="558" stroke="#bfc0c0" stroke-width="1"/>
+<text x="1708" y="628" class="small" text-anchor="end" xml:space="preserve">Matmul.out → x</text>
+<text x="1708" y="718" class="small" text-anchor="end" xml:space="preserve">Add.in ← x</text>
+<text x="1708" y="808" class="small" text-anchor="end" xml:space="preserve">Softmax.in ← z</text>
+<path data-connector="matmul" d="M 360 414 H 432 Q 440 414 440 406 V 200 Q 440 192 448 192 H 512" fill="none" stroke="#6b86ac" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-link)"/>
+<path data-connector="add" d="M 376 506 H 456 Q 464 506 464 498 V 480 Q 464 472 472 472 H 512" fill="none" stroke="#cd8051" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-accent)"/>
+<path data-connector="softmax" d="M 392 566 H 480 Q 488 566 488 574 V 720 Q 488 728 496 728 H 512" fill="none" stroke="#7c9882" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-green)"/>
+<path data-connector="matmul" d="M 904 244 H 944 Q 952 244 952 236 V 198 Q 952 190 960 190 H 1164" fill="none" stroke="#6b86ac" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-link)"/>
+<path data-connector="matmul" d="M 904 306 H 992 Q 1000 306 1000 314 V 482 Q 1000 490 1008 490 H 1020 a 4 4 0 0 1 8 0 H 1068 a 4 4 0 0 1 8 0 H 1180" fill="none" stroke="#6b86ac" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-link)"/>
+<path data-connector="matmul" d="M 904 378 H 968 Q 976 378 976 386 V 602 Q 976 610 984 610 H 1068 a 4 4 0 0 1 8 0 H 1164" fill="none" stroke="#6b86ac" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-link)"/>
+<path data-connector="add" d="M 904 524 H 972 a 4 4 0 0 1 8 0 H 1016 Q 1024 524 1024 516 V 288 Q 1024 280 1032 280 H 1164" fill="none" stroke="#cd8051" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-accent)"/>
+<path data-connector="add" d="M 904 628 H 1040 Q 1048 628 1048 636 V 692 Q 1048 700 1056 700 H 1068 a 4 4 0 0 1 8 0 H 1164" fill="none" stroke="#cd8051" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-accent)"/>
+<path data-connector="softmax" d="M 904 780 H 1064 Q 1072 780 1072 772 V 378 Q 1072 370 1080 370 H 1164" fill="none" stroke="#7c9882" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-green)"/>
+<path data-connector="softmax" d="M 904 928 H 1088 Q 1096 928 1096 920 V 842 Q 1096 834 1104 834 H 1164" fill="none" stroke="#7c9882" stroke-width="1.3" marker-end="url(#trinity-lowering-kernel-phases-model-arrow-green)"/>
+</svg>

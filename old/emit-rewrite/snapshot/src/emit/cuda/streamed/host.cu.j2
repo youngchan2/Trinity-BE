@@ -1,0 +1,114 @@
+namespace trinity::generated {
+static int prepared_device = -1;
+static CUcontext prepared_context = nullptr;
+
+static int check_prepared(abi::ErrorInfo* error, abi::Stage stage) {
+  if (prepared_device < 0) return abi::report(error, abi::generated, kNotPrepared, stage);
+
+  int device = 0;
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage);
+
+  CUcontext context = nullptr;
+  auto result = cuCtxGetCurrent(&context);
+  if (result != CUDA_SUCCESS) return abi::report(error, abi::driver, result, stage);
+
+  return abi::report(error, abi::generated,
+      device == prepared_device && context == prepared_context ? 0 : kWrongDevice, stage);
+}
+} // namespace trinity::generated
+
+extern "C" int trinity_prepare(unsigned* maximum_workers, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  if (!maximum_workers) return abi::report(error, abi::generated, kInvalidLaunch, abi::prepare);
+
+  if (prepared_device >= 0) {
+    int result = check_prepared(error, abi::prepare);
+    if (!result) *maximum_workers = 1;
+    return result;
+  }
+
+  int device = 0;
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::prepare);
+
+  cudaDeviceProp properties{};
+  status = cudaGetDeviceProperties(&properties, device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::prepare);
+  if (properties.major != 9 || properties.minor != 0)
+    return abi::report(error, abi::generated, kUnsupportedDevice, abi::prepare);
+
+{% for kernel in kernels %}
+  status = cudaFuncSetAttribute(kernel_{{ loop.index0 }}, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::configure);
+{% endfor %}
+
+  status = cudaFree(nullptr);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::prepare);
+
+  CUcontext context = nullptr;
+  auto result = cuCtxGetCurrent(&context);
+  if (result != CUDA_SUCCESS) return abi::report(error, abi::driver, result, abi::prepare);
+
+  prepared_context = context;
+  prepared_device = device;
+  *maximum_workers = 1;
+
+  return abi::report(error, abi::none, 0, abi::prepare);
+}
+
+extern "C" int trinity_launch(trinity::generated::LaunchParams const* p, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  int prepared = check_prepared(error, abi::validate);
+  if (prepared) return prepared;
+  if (!p || !p->bindings || p->binding_count != kBuffers)
+    return abi::report(error, abi::generated, kInvalidLaunch, abi::validate);
+
+  Bindings bindings{};
+{% for buffer in buffers %}
+  if (!p->bindings[{{ buffer.value }}] || reinterpret_cast<std::uintptr_t>(p->bindings[{{ buffer.value }}]) % {{ buffer.alignment }})
+    return abi::report(error, abi::generated, kInvalidLaunch, abi::validate);
+  bindings.values[{{ buffer.value }}] = p->bindings[{{ buffer.value }}];
+{% endfor %}
+
+  auto stream = reinterpret_cast<cudaStream_t>(p->stream);
+  bool submitted = false;
+
+{% for launch in launches %}{% if launch.blocks > 0 %}
+  kernel_{{ launch.task }}<<<{{ launch.blocks }}, kThreads, kSharedBytes, stream>>>(bindings, {{ launch.block_base }}LL);
+  submitted = true;
+  {
+    auto status = cudaGetLastError();
+    if (status != cudaSuccess) return abi::report(error, abi::runtime, status, abi::launch, submitted);
+  }
+{% endif %}{% endfor %}
+
+  return abi::report(error, abi::none, 0, abi::launch, submitted);
+}
+
+extern "C" int trinity_status(void* stream, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  int result = generated::check_prepared(error, abi::completion);
+  if (result) return result;
+
+  return abi::report(error, abi::runtime, cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream)), abi::completion, true);
+}
+
+extern "C" int trinity_release(trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  if (prepared_device >= 0) {
+    int result = check_prepared(error, abi::release);
+    if (result) return result;
+  }
+
+  prepared_device = -1;
+  prepared_context = nullptr;
+
+  return abi::report(error, abi::none, 0, abi::release);
+}

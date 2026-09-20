@@ -1,0 +1,33 @@
+  for (int64_t {{ prefix }}_tile = 0; {{ prefix }}_tile < {{ prefix }}_tiles; ++{{ prefix }}_tile) {
+    auto {{ prefix }}_coordinate_tile = cute::local_tile(
+        {{ prefix }}_coordinates, {{ prefix }}_tile_shape, {{ prefix }}_tile);
+    auto {{ prefix }}_thread_coordinates = cute::local_partition(
+        {{ prefix }}_coordinate_tile, {{ prefix }}_thread_layout, threadIdx.x);
+    auto {{ prefix }}_valid = cute::make_tensor<bool>(cute::shape({{ prefix }}_thread_coordinates));
+    // Mask both the internal tile's padding and clipped accesses at the tensor boundary.
+    CUTE_UNROLL
+    for (int element = 0; element < cute::size({{ prefix }}_valid); ++element) {
+      auto coordinate = {{ prefix }}_thread_coordinates(element);
+      {{ prefix }}_valid(element) = cute::elem_less(coordinate, {{ prefix }}_shape) && ({{ predicate }});
+    }
+{% for tensor in tensors %}
+    auto {{ tensor.name }}_tile = cute::local_tile(
+        {{ tensor.name }}_window, {{ prefix }}_tile_shape, {{ prefix }}_tile);
+    auto {{ tensor.name }}_thread = cute::local_partition(
+        {{ tensor.name }}_tile, {{ prefix }}_thread_layout, threadIdx.x);
+{% endfor %}
+{% for input in inputs %}
+    auto {{ input }}_fragment = cute::make_tensor_like<float>({{ input }}_thread);
+    cute::copy_if({{ prefix }}_valid, {{ input }}_thread, {{ input }}_fragment);
+{% endfor %}
+
+    CUTE_UNROLL
+    for (int element = 0; element < cute::size({{ prefix }}_valid); ++element) {
+      if ({{ prefix }}_valid(element)) {
+{% for input in inputs %}
+        const float {{ prefix }}_load{{ loop.index0 }} = {{ input }}_fragment(element);
+{% endfor %}
+{% for expression in expressions %}
+        const float {{ expression.name }} = {{ expression.value }};
+{% endfor %}
+        const {{ output_type }} {{ prefix }}_result = static_cast<{{ output_type }}>({{ result }});

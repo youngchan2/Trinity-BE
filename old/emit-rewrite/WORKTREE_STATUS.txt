@@ -1,0 +1,96 @@
+AM src/emit/cuda/access.rs
+MM src/emit/cuda/backend.rs
+ D src/emit/cuda/error.rs
+MD src/emit/cuda/graph.rs
+A  src/emit/cuda/indexing.rs
+AD src/emit/cuda/loop_body.rs
+MM src/emit/cuda/mod.rs
+ M src/emit/cuda/persistent/host.cu.j2
+MM src/emit/cuda/persistent/kernels.cu.j2
+MM src/emit/cuda/persistent/mod.rs
+MM src/emit/cuda/persistent/program.cu.j2
+MM src/emit/cuda/persistent/types.cuh
+AD src/emit/cuda/phase.rs
+AD src/emit/cuda/program.rs
+ M src/emit/cuda/render.rs
+MM src/emit/cuda/requirements.rs
+MM src/emit/cuda/source.rs
+MM src/emit/cuda/streamed/host.cu.j2
+MM src/emit/cuda/streamed/kernels.cu.j2
+MM src/emit/cuda/streamed/mod.rs
+ M src/emit/cuda/streamed/program.cu.j2
+M  src/emit/cuda/streamed/types.cuh
+ M src/emit/cuda/templates/headers.cu.j2
+MM src/emit/cuda/tests.rs
+ M src/emit/cuda/types.cuh
+MM src/emit/mod.rs
+M  src/fusion/graph.rs
+MM src/fusion/mod.rs
+AM src/implementation/cuda/all_gather/mod.rs
+RM src/implementation/cuda/templates/nvls.cu.j2 -> src/implementation/cuda/all_gather/nvls.cu.j2
+AM src/implementation/cuda/all_gather/nvls.rs
+RM src/implementation/cuda/templates/peer.cu.j2 -> src/implementation/cuda/all_gather/peer.cu.j2
+RM src/implementation/cuda/peer.rs -> src/implementation/cuda/all_gather/peer.rs
+AM src/implementation/cuda/broadcast/mod.rs
+D  src/implementation/cuda/emission.rs
+A  src/implementation/cuda/expression.rs
+R  src/implementation/cuda/fusion.rs -> src/implementation/cuda/fusion/hopper.rs
+A  src/implementation/cuda/fusion/mod.rs
+A  src/implementation/cuda/fusion/pointwise.rs
+A  src/implementation/cuda/gemm/hopper_wgmma/epilogue.cu
+A  src/implementation/cuda/gemm/hopper_wgmma/mainloop.cu
+AM src/implementation/cuda/gemm/hopper_wgmma/mod.rs
+A  src/implementation/cuda/gemm/hopper_wgmma/prologue.cu
+A  src/implementation/cuda/gemm/mod.rs
+D  src/implementation/cuda/hopper_wgmma.rs
+M  src/implementation/cuda/mod.rs
+D  src/implementation/cuda/nvls.rs
+AM src/implementation/cuda/pointwise/mod.rs
+AM src/implementation/cuda/reduce_sum/mod.rs
+D  src/implementation/cuda/templates/tensor.cu.j2
+D  src/implementation/cuda/templates/wgmma.cu.j2
+D  src/implementation/cuda/tensor.rs
+M  src/implementation/mod.rs
+MM src/tests.rs
+M  tests/compile_cuda.rs
+MM tests/emit.rs
+MM tests/emit_scheduler.rs
+A  tests/fixtures/loop_ir/IR.v3.meta.json
+A  tests/fixtures/loop_ir/IR.v3.split_k.txt
+A  tests/fixtures/loop_ir/IR.v3.txt
+MM tests/fusion.rs
+AM tests/loop_ir.rs
+M  tests/physical_plan.rs
+AM tests/support/loop_ir.rs
+MM tests/support/mod.rs
+M  tests/support/tensor.rs
+MM tests/tensor_ops.rs
+AM tests/unified_lowering.rs
+?? src/emit/bindings.rs
+?? src/emit/cuda/address.rs
+?? src/emit/cuda/body/builder.rs
+?? src/emit/cuda/body/code.rs
+?? src/emit/cuda/body/mod.rs
+?? src/emit/cuda/body/program.rs
+?? src/emit/cuda/domain.rs
+?? src/emit/cuda/execution.rs
+?? src/emit/cuda/persistent/access.rs
+?? src/emit/cuda/persistent/graph.rs
+?? src/emit/cuda/persistent/render.rs
+?? src/emit/cuda/prepare.rs
+?? src/emit/cuda/regions.rs
+?? src/emit/cuda/streamed/render.rs
+?? src/emit/cuda/validation.rs
+?? src/emit/error.rs
+?? src/emit/prepare.rs
+?? src/emit/source.rs
+?? src/plan/builder.rs
+?? src/plan/canonical.rs
+?? src/plan/error.rs
+?? src/plan/finalize.rs
+?? src/plan/loops.rs
+?? src/plan/mod.rs
+?? src/plan/normalize.rs
+?? src/plan/rewrite.rs
+?? src/plan/types.rs
+?? tests/task_domain.rs

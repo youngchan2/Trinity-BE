@@ -6,33 +6,25 @@ use std::process::Command;
 use tempfile::TempDir;
 
 use super::*;
-use crate::{
-    ComputeOperation, DType, OperationPayload, PhysicalPlanBuilder, Storage, TargetCapability,
-    emit, gemm_implementations,
-};
+use crate::compile::CudaRequirements;
 
 fn source(world: usize) -> CudaSource {
-    let target = TargetCapability::Cuda(CudaTargetCapability::Hopper);
-    let mut b = PhysicalPlanBuilder::new(target, world);
-    let a = b.add_value(DType::Bf16, [128, 64], Storage::External);
-    let w = b.add_value(DType::Bf16, [64, 128], Storage::External);
-    let y = b.add_value(DType::Bf16, [128, 128], Storage::External);
-
-    b.bind_input("a", a);
-    b.bind_input("w", w);
-
-    let instance = gemm_implementations(target)[0]
-        .enumerate([DType::Bf16; 3], [&[128, 64], &[64, 128], &[128, 128]])
-        .pop()
-        .unwrap();
-    let op = b.add_operation(
-        [a, w],
-        [y],
-        OperationPayload::Compute(ComputeOperation::new(instance)),
-    );
-    b.add_statement(crate::Statement::Operation(op));
-
-    emit(&b.finalize("y", y).unwrap()).unwrap()
+    CudaSource {
+        code: "// fake-toolchain compile input\n".into(),
+        requirements: CudaRequirements {
+            target: CudaTargetCapability::Hopper,
+            world_size: world,
+            buffers: vec![],
+            workspace_bytes: 0,
+            workspace_alignment: 1,
+            workspace_symmetric: world > 1,
+            cooperative_launch: world > 1,
+            shared_memory_bytes: 0,
+            block_threads: 128,
+            nvshmem: world > 1,
+            nvls: false,
+        },
+    }
 }
 
 fn write(path: &Path, text: &str) {
@@ -174,7 +166,7 @@ fn failures_keep_process_diagnostics_and_remove_temporary_files() {
         });
 
         let diagnostics = error.diagnostics().unwrap();
-        assert!(diagnostics.generated_source.contains("trinity_launch"));
+        assert_eq!(diagnostics.generated_source, source(1).code());
         assert!(String::from_utf8_lossy(&diagnostics.stdout).contains("fixture compiler stdout"));
         assert!(String::from_utf8_lossy(&diagnostics.stderr).contains("fixture compiler warning"));
         if mode == "failure" {
@@ -196,7 +188,7 @@ fn failures_keep_process_diagnostics_and_remove_temporary_files() {
     let diagnostics = error.diagnostics().unwrap();
     assert_eq!(diagnostics.arguments, [OsString::from("--version")]);
     assert!(diagnostics.status.is_none());
-    assert!(diagnostics.generated_source.contains("trinity_launch"));
+    assert_eq!(diagnostics.generated_source, source(1).code());
 }
 
 #[test]
@@ -308,7 +300,7 @@ fn toolchain_versions_are_rejected_with_actionable_diagnostics() {
 
     let diagnostics = error.diagnostics().unwrap();
     assert_eq!(diagnostics.arguments, [OsString::from("--version")]);
-    assert!(diagnostics.generated_source.contains("trinity_launch"));
+    assert_eq!(diagnostics.generated_source, source(1).code());
 
     fs::remove_file(sdk.root.path().join("version")).unwrap();
     write(

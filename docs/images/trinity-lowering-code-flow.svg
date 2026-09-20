@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="trinity-lowering-code-flow-title trinity-lowering-code-flow-desc">
+<title id="trinity-lowering-code-flow-title">PhysicalPlan에서 CudaSource까지</title>
+<desc id="trinity-lowering-code-flow-desc">PhysicalPlan에서 버퍼 요구사항과 공통 Body를 준비하고 논리 접근을 검증한 뒤, world_size에 따라 Streamed 또는 Persistent 실행 정보를 구성하고 자원 요구사항 확정과 CUDA 소스 렌더링을 거쳐 CudaSource를 반환한다.</desc>
+<defs>
+<style>@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR&amp;display=swap");</style>
+<marker id="trinity-lowering-code-flow-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker>
+<marker id="trinity-lowering-code-flow-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#eb6c36"/></marker>
+<marker id="trinity-lowering-code-flow-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"/></marker>
+<style>
+text{fill:#2d3142;font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif}
+.name{font-size:12px;font-weight:600}
+.sub{font:9px 'Geist Mono','Noto Sans KR',monospace;fill:#4f5d75}
+.edge-label{font:8px 'Geist Mono',monospace;fill:#4f5d75}
+.legend-label{font-size:10px;fill:#4f5d75}
+.flow{fill:none;stroke:#4f5d75;stroke-width:1.2;marker-end:url(#trinity-lowering-code-flow-arrow)}
+</style>
+</defs>
+<rect width="1280" height="720" fill="#f5f5f5"/>
+
+<!-- Connectors precede nodes. Branches have distinct routes and landing points. -->
+<path class="flow" data-from="plan" data-to="buffers" d="M 640 88 V 112"/>
+<path class="flow" data-from="buffers" data-to="common" d="M 640 160 V 184"/>
+<path class="flow" data-from="common" data-to="mode" d="M 640 248 V 272"/>
+<path class="flow" data-from="mode" data-to="streamed" d="M 580 308 H 368 Q 360 308 360 316 V 376"/>
+<path class="flow" data-from="mode" data-to="persistent" d="M 700 308 H 912 Q 920 308 920 316 V 376"/>
+<path class="flow" data-from="streamed" data-to="render" d="M 360 440 V 460 Q 360 468 368 468 H 552 Q 560 468 560 476 V 488"/>
+<path class="flow" data-from="persistent" data-to="render" d="M 920 440 V 460 Q 920 468 912 468 H 728 Q 720 468 720 476 V 488"/>
+<path class="flow" data-from="render" data-to="source" d="M 640 552 V 584"/>
+
+<rect class="label-mask" x="412" y="288" width="100" height="12" fill="#f5f5f5"/>
+<text x="462" y="297" text-anchor="middle" class="edge-label">world_size == 1</text>
+<rect class="label-mask" x="772" y="288" width="96" height="12" fill="#f5f5f5"/>
+<text x="820" y="297" text-anchor="middle" class="edge-label">world_size &gt; 1</text>
+<rect class="label-mask" x="412" y="448" width="68" height="12" fill="#f5f5f5"/>
+<text x="446" y="457" text-anchor="middle" class="edge-label">Execution</text>
+<rect class="label-mask" x="800" y="448" width="68" height="12" fill="#f5f5f5"/>
+<text x="834" y="457" text-anchor="middle" class="edge-label">Execution</text>
+<g class="component" data-component="plan">
+<rect class="node" x="520" y="40" width="240" height="48" rx="20" fill="#f5f5f5" stroke="#bfc0c0"/>
+<text x="640" y="61" text-anchor="middle" class="name">PhysicalPlan</text>
+<text x="640" y="77" text-anchor="middle" class="sub">emit(plan)</text>
+</g>
+<g class="component" data-component="buffers">
+<rect class="node" x="480" y="112" width="320" height="48" rx="6" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="640" y="133" text-anchor="middle" class="name">버퍼 바인딩 요구사항 수집</text>
+<text x="640" y="149" text-anchor="middle" class="sub">prepare() · External / Global</text>
+</g>
+<g class="component" data-component="common">
+<rect class="node" x="480" y="184" width="320" height="64" rx="6" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="640" y="205" text-anchor="middle" class="name">공통 실행 단위 구성 · 논리 검증</text>
+<text x="640" y="222" text-anchor="middle" class="sub">partition() → body::build() → Validator</text>
+<text x="640" y="238" text-anchor="middle" class="sub">Body + Task domain</text>
+</g>
+<g class="component" data-component="mode">
+<path class="node" d="M 640 272 L 700 308 L 640 344 L 580 308 Z" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="640" y="312" text-anchor="middle" class="name">실행 배치</text>
+</g>
+<g class="component" data-component="streamed">
+<rect class="node" x="200" y="376" width="320" height="64" rx="6" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="360" y="398" text-anchor="middle" class="name">Streamed</text>
+<text x="360" y="416" text-anchor="middle" class="sub">domain → Grid → launches</text>
+<text x="360" y="431" text-anchor="middle" class="sub">StreamedExecution::new()</text>
+</g>
+<g class="component" data-component="persistent">
+<rect class="node" x="760" y="376" width="320" height="64" rx="6" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="920" y="398" text-anchor="middle" class="name">Persistent</text>
+<text x="920" y="416" text-anchor="middle" class="sub">rank / tile → Work → dependencies</text>
+<text x="920" y="431" text-anchor="middle" class="sub">access::describe() → graph::resolve()</text>
+</g>
+<g class="component" data-component="render">
+<rect class="node" x="480" y="488" width="320" height="64" rx="6" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="640" y="509" text-anchor="middle" class="name">자원 확정 · CUDA 렌더링</text>
+<text x="640" y="526" text-anchor="middle" class="sub">CudaRequirements + Body + Execution</text>
+<text x="640" y="542" text-anchor="middle" class="sub">body::render() → render::program()</text>
+</g>
+<g class="component" data-component="source">
+<rect class="node" x="480" y="584" width="320" height="48" rx="20" fill="#f5f5f5" stroke="#bfc0c0"/>
+<text x="640" y="605" text-anchor="middle" class="name">CudaSource</text>
+<text x="640" y="621" text-anchor="middle" class="sub">code · requirements · bodies · execution</text>
+</g>
+
+<g class="legend" aria-label="도형 범례">
+<line x1="40" y1="660" x2="1240" y2="660" stroke="#bfc0c0" stroke-width="0.8"/>
+<rect x="40" y="680" width="28" height="16" rx="8" fill="#f5f5f5" stroke="#bfc0c0"/>
+<text x="80" y="692" class="legend-label">입력 · 결과</text>
+<rect x="216" y="680" width="28" height="16" rx="4" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="256" y="692" class="legend-label">처리</text>
+<path d="M 356 680 L 368 688 L 356 696 L 344 688 Z" fill="#ffffff" stroke="#bfc0c0"/>
+<text x="380" y="692" class="legend-label">조건 분기</text>
+<text x="1240" y="692" text-anchor="end" class="legend-label">emit(&amp;PhysicalPlan) → CudaSource</text>
+</g>
+</svg>

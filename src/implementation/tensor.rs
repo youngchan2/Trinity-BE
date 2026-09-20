@@ -43,7 +43,7 @@ pub fn pointwise_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn PointwiseImplementation] {
     match target {
-        TargetCapability::Cuda(target) => super::cuda::pointwise_implementations(target),
+        TargetCapability::Cuda(target) => super::definitions::pointwise_implementations(target),
     }
 }
 
@@ -51,7 +51,7 @@ pub fn reduce_sum_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn ReduceSumImplementation] {
     match target {
-        TargetCapability::Cuda(target) => super::cuda::reduce_sum_implementations(target),
+        TargetCapability::Cuda(target) => super::definitions::reduce_sum_implementations(target),
     }
 }
 
@@ -59,6 +59,6 @@ pub fn broadcast_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn BroadcastImplementation] {
     match target {
-        TargetCapability::Cuda(target) => super::cuda::broadcast_implementations(target),
+        TargetCapability::Cuda(target) => super::definitions::broadcast_implementations(target),
     }
 }

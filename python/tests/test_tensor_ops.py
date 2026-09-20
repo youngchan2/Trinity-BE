@@ -49,8 +49,9 @@ def test_graph_example_lowers_gemm_bias_and_relu():
     metadata = json.loads(plan.metadata_json())
     assert {b["name"] for b in metadata["inputs"]} == {"X", "W", "bias"}
     assert len(metadata["operations"]) == len(metadata["statements"]) == 3
-    assert metadata["statements"] == [
-        {"operations": [operation["id"]]} for operation in metadata["operations"]
+    assert all("loop" in statement for statement in metadata["statements"])
+    assert [s["operations"] for s in metadata["statements"]] == [
+        [operation["id"]] for operation in metadata["operations"]
     ]
     source = tl.emit(plan)
     assert sum(not b.external for b in source.requirements.buffers) == 2
@@ -74,15 +75,10 @@ def test_invalid_operands_and_arity_are_rejected():
     assert (
         tl.reduce_sum_implementations()[0].enumerate(["fp32"] * 2, [[16, 32], [32]], axis=0) == []
     )
-    instance = definition("sqrt").enumerate(["fp32"] * 2, [[16]] * 2)[0]
     b = tl.PhysicalPlanBuilder()
-    x = b.add_value("fp32", [16], "external")
     y = b.add_value("fp32", [16], "external")
-    with pytest.raises(ValueError):
-        b.add_operation([x, x], [y], instance)
-    wrong = b.add_value("bf16", [16], "external")
-    with pytest.raises(ValueError):
-        b.add_operation([x], [wrong], instance)
+    with pytest.raises(ValueError, match="unknown value"):
+        b.add_operation([999], [y], expression="(store invalid)")
 
 
 def test_fp32_metadata_rejects_wrong_bytes_stride_rank():

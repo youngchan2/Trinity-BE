@@ -1,0 +1,34 @@
+{
+  using Element = cutlass::bfloat16_t;
+
+{% if push %}
+  auto* src = static_cast<Element const*>(${input_buffer});
+
+  std::int64_t row = tile_coord.x + {% if axis == 0 %}std::int64_t(runtime.rank()) * {{ source_rows }}{% else %}0{% endif %};
+  std::int64_t col = tile_coord.y + {% if axis == 1 %}std::int64_t(runtime.rank()) * {{ source_cols }}{% else %}0{% endif %};
+
+  for (int peer = 0; peer < kWorld; ++peer) {
+    auto* dst = static_cast<Element*>(runtime.peer_ptr(${output_buffer}, peer));
+    if (dst == nullptr) { runtime.fail(kPeerUnavailable); return false; }
+
+    for (int i = threadIdx.x; i < 64 * 64; i += blockDim.x)
+      dst[std::size_t(row + i / 64) * {{ target_cols }} + col + i % 64] =
+          src[std::size_t(tile_coord.x + i / 64) * {{ source_cols }} + tile_coord.y + i % 64];
+  }
+{% else %}
+  auto* src = static_cast<Element const*>(runtime.peer_ptr(${input_buffer}, (tile_coord.{{ "x" if axis == 0 else "y" }} / {{ source_rows if axis == 0 else source_cols }})));
+  if (src == nullptr) { runtime.fail(kPeerUnavailable); return false; }
+
+  auto* dst = static_cast<Element*>(${output_buffer});
+
+  std::int64_t row = tile_coord.x {% if axis == 0 %}% {{ source_rows }}{% endif %};
+  std::int64_t col = tile_coord.y {% if axis == 1 %}% {{ source_cols }}{% endif %};
+
+  for (int i = threadIdx.x; i < 64 * 64; i += blockDim.x)
+    dst[std::size_t(tile_coord.x + i / 64) * {{ target_cols }} + tile_coord.y + i % 64] =
+        src[std::size_t(row + i / 64) * {{ source_cols }} + col + i % 64];
+{% endif %}
+
+  // Worker publication follows a system fence from every writer in the CTA.
+
+}

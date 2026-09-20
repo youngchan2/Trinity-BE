@@ -1,0 +1,7 @@
+  {
+    CUTE_UNROLL
+    for (int element = 0; element < cute::size({{ prefix }}_accumulator); ++element) {
+      const int row = cute::get<0>({{ prefix }}_coordinates(element));
+      const int column = cute::get<1>({{ prefix }}_coordinates(element));
+      if (row < {{ rows }} && ({{ valid_row }})) {
+        const {{ output_type }} {{ prefix }}_result = static_cast<{{ output_type }}>({{ prefix }}_accumulator(element));

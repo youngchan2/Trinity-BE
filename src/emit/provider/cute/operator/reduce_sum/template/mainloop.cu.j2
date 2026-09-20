@@ -1,0 +1,26 @@
+  {
+    const int64_t column_origin = {{ column_origin }};
+    for (int group = 0; group < {{ row_groups }}; ++group) {
+      const int row = group * 4 + {{ prefix }}_warp;
+      if (row < {{ rows }} && ({{ valid_row }})) {
+        auto input = cute::make_tensor(
+            cute::make_gmem_ptr(({{ input }}) + ({{ prefix }}_row_origin + row) * int64_t({{ stride }}) + column_origin),
+            cute::make_layout(cute::make_shape(cute::Int<{{ columns }}>{})));
+        float partial = 0.0f;
+        for (int64_t tile = 0; tile < int64_t({{ columns }}) / 32 + ({{ columns }} % 32 != 0); ++tile) {
+          const int64_t column = tile * 32 + {{ prefix }}_lane;
+          auto chunk = cute::local_tile(input, cute::make_shape(cute::Int<32>{}), cute::make_coord(tile));
+          auto lane = cute::local_partition(chunk, cute::make_layout(cute::make_shape(cute::Int<32>{})), {{ prefix }}_lane);
+          if (column < int64_t({{ columns }}) && ({{ valid_column }})) {
+            const float value = static_cast<float>(lane(0));
+            partial += {% if square %}value * value{% else %}value{% endif %};
+          }
+        }
+        // All lanes of the owning warp reach this collective, including masked columns.
+        for (int offset = 16; offset > 0; offset /= 2) {
+          partial += __shfl_down_sync(0xffffffffu, partial, offset);
+        }
+        if ({{ prefix }}_lane == 0) {{ prefix }}_accumulator[group] += partial;
+      }
+    }
+  }

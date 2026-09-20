@@ -6,8 +6,6 @@ use crate::{
     OperationId, PhysicalInvariantError, PhysicalPlan, Statement, Storage, ValueInstanceId,
 };
 
-use std::collections::BTreeSet;
-
 /// Proposes operation and storage rewrites for producer and consumer statements.
 /// Proposals preserve the original operation order and sequential scopes.
 pub trait FusionRule: Sync {
@@ -58,6 +56,8 @@ impl FusionRewrite {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FusionError {
+    #[error("fusion validation is being rebuilt with the kernel provider pipeline")]
+    Unavailable,
     #[error("downstream fusion is not connected to the structured Statement model")]
     UnsupportedStatementModel,
     #[error("invalid fusion rewrite: {reason}")]
@@ -67,142 +67,15 @@ pub enum FusionError {
     InvalidPlan(#[from] PhysicalInvariantError),
 }
 
-/// Enumerate the original plan and legal adjacent fusions to a fixed point.
-/// Every candidate is rebuilt transactionally and checked by common CUDA lowering.
+/// Empty rules preserve the original plan. Executable fusion validation is
+/// unavailable until the new provider and memory analysis contracts are ready.
 pub fn fuse(
     plan: &PhysicalPlan,
     rules: &[&dyn FusionRule],
 ) -> Result<Vec<PhysicalPlan>, FusionError> {
-    let mut results = vec![plan.clone()];
-    let mut cursor = 0;
-    while cursor < results.len() {
-        let current = results[cursor].clone();
-        for left in 0..current.statements().len().saturating_sub(1) {
-            let producer = &current.statements()[left];
-            let consumer = &current.statements()[left + 1];
-            for rule in rules {
-                for proposal in rule.apply(&current, producer, consumer)? {
-                    validate(&current, producer, consumer, &proposal)?;
-                    let Some(candidate) =
-                        crate::physical::rewrite_statements(&current, left, &proposal)?
-                    else {
-                        continue;
-                    };
-                    // This checks task-local lifetimes, layout adapters, accesses,
-                    // stages, resource limits and the reconstructed dependency DAG.
-                    if crate::emit(&candidate).is_err() {
-                        continue;
-                    }
-                    if !results.iter().any(|p| p.same_body(&candidate)) {
-                        results.push(candidate);
-                    }
-                }
-            }
-        }
-        cursor += 1;
+    if rules.is_empty() {
+        Ok(vec![plan.clone()])
+    } else {
+        Err(FusionError::Unavailable)
     }
-    Ok(results)
-}
-
-fn validate(
-    plan: &PhysicalPlan,
-    producer: &Statement,
-    consumer: &Statement,
-    proposal: &FusionRewrite,
-) -> Result<(), FusionError> {
-    let invalid = |reason| FusionError::InvalidRewrite { reason };
-    let expected: Vec<_> = producer
-        .operations()
-        .into_iter()
-        .chain(consumer.operations())
-        .collect();
-    if proposal.operations != expected || proposal.storage_updates.is_empty() {
-        return Err(invalid(
-            "rewrite must preserve the adjacent regions and promote a binding",
-        ));
-    }
-    let members: BTreeSet<_> = expected.iter().copied().collect();
-    let mut updated = BTreeSet::new();
-    for &(id, storage) in &proposal.storage_updates {
-        let Some(value) = plan.value_instance(id) else {
-            return Err(invalid("unknown promoted value"));
-        };
-        if !updated.insert(id)
-            || value.storage() != Storage::Global
-            || !matches!(storage, Storage::Shared | Storage::Register)
-            || plan.output().value() == id
-            || plan.inputs().iter().any(|b| b.value() == id)
-            || plan.operations().any(|(op, p)| {
-                !members.contains(&op) && (p.inputs().contains(&id) || p.outputs().contains(&id))
-            })
-            || plan
-                .operations()
-                .filter(|(_, p)| p.outputs().contains(&id))
-                .count()
-                != 1
-        {
-            return Err(invalid(
-                "promotion needs a unique internal producer and no external uses",
-            ));
-        }
-        if !producer
-            .operations()
-            .iter()
-            .any(|op| plan.operation(*op).unwrap().outputs().contains(&id))
-            || !consumer
-                .operations()
-                .iter()
-                .any(|op| plan.operation(*op).unwrap().inputs().contains(&id))
-        {
-            return Err(invalid("promoted binding must connect the two regions"));
-        }
-    }
-    Ok(())
-}
-
-/// Equal-coordinate pointwise expressions can reuse a producer's tile traversal.
-pub(crate) fn pointwise(plan: &PhysicalPlan, id: OperationId) -> bool {
-    let Some(op) = plan.operation(id) else {
-        return false;
-    };
-    let crate::OperationPayload::Compute(compute) = op.payload() else {
-        return false;
-    };
-    let selected = compute.implementation().id();
-    if selected.as_str() != "cuda.simt.expression"
-        && !crate::pointwise_implementations(plan.target())
-            .iter()
-            .any(|d| d.id() == selected)
-    {
-        return false;
-    }
-    let Some(store) = op.expression().and_then(crate::Expression::list) else {
-        return false;
-    };
-    if store.len() != 4 || op.outputs().len() != 1 {
-        return false;
-    }
-    let shape = plan.value_instance(op.outputs()[0]).unwrap().shape();
-    if op
-        .inputs()
-        .iter()
-        .any(|v| plan.value_instance(*v).unwrap().shape() != shape)
-    {
-        return false;
-    }
-    fn check(e: &crate::Expression, index: &crate::Expression) -> bool {
-        if e.atom().is_some() {
-            return true;
-        }
-        let Some(xs) = e.list() else { return false };
-        match e.operator() {
-            Some("load") => xs.len() == 3 && &xs[2] == index,
-            Some("float_bits") => true,
-            Some("+" | "-" | "*" | "/" | "relu" | "sqrt" | "sigmoid" | "sqr") => {
-                xs[1..].iter().all(|x| check(x, index))
-            }
-            _ => false,
-        }
-    }
-    !op.inputs().contains(&op.outputs()[0]) && check(&store[2], &store[3])
 }

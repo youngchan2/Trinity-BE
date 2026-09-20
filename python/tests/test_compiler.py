@@ -1,8 +1,14 @@
 import concurrent.futures
 import json
 import shutil
+import sys
+from pathlib import Path
 import pytest
 import trinity_lowering as tl
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
+from plan_syntax import index, load, store
+from plans import gather
 
 
 def identity():
@@ -10,7 +16,7 @@ def identity():
     x = b.add_value("bf16", [128, 128], "external")
     b.bind_input('X with "quotes"', x)
     b.bind_input("alias", x)
-    return b.finalize("Y", x)
+    return b.build([], "Y", x)
 
 
 def test_compiler_ownership_and_manifest(sdk):
@@ -84,35 +90,31 @@ def test_builder_checks_and_metadata():
     ids = [b.add_value("bf16", s, "external") for s in shapes]
     b.bind_input("X", ids[0])
     b.bind_input("W", ids[1])
-    op = b.add_operation(ids[:2], ids[2:], implementations[0])
-    b.add_statement([op])
+    a, w, y = ids
+    ai = index("(tile m 128)", "(tile k 64)")
+    bi = index("(tile k 64)", "(tile n 128)")
+    ci = index("(tile m 128)", "(tile n 128)")
+    rhs = f"(+ {load(y, shapes[2], ci)} (@ {load(a, shapes[0], ai)} {load(w, shapes[1], bi)}))"
+    op = b.add_operation(
+        ids[:2], ids[2:], expression=store(y, shapes[2], rhs, ci)
+    )
+    inner = b.add_loop("sequential", "k", 0, 64, 64, [op])
+    cols = b.add_loop("parallel", "n", 0, 128, 128, [inner])
+    rows = b.add_loop("parallel", "m", 0, 128, 128, [cols])
 
-    assert "trinity_abi" in tl.emit(b.finalize("Y", ids[2])).code
+    assert (
+        json.loads(b.build([rows], "Y", y).metadata_json())["statements"][0]["loop"]["kind"]
+        == "parallel"
+    )
     with pytest.raises(ValueError):
         b.add_value("bf16", [128, 128], "external")
 
 
-def test_all_gather_bindings_on_both_axes_and_world_validation():
-    for definition in tl.all_gather_implementations():
-        for axis in (0, 1):
-            shapes = [[128, 128], [128, 128]]
-            shapes[1][axis] *= 2
-            instances = definition.enumerate("bf16", shapes, axis, 2)
-
-            assert instances
-
-            builder = tl.PhysicalPlanBuilder(2)
-            x, y = [builder.add_value("bf16", s, "external") for s in shapes]
-            builder.bind_input("X", x)
-            op = builder.add_operation([x], [y], instances[0])
-            builder.add_statement([op])
-            req = tl.emit(builder.finalize("Y", y)).requirements
-
-            assert req.world_size == 2 and req.workspace_symmetric
-            assert req.nvls == ("one_shot_push_nbi" in definition.id)
-
-            other = tl.PhysicalPlanBuilder(3)
-            a, b = [other.add_value("bf16", s, "external") for s in shapes]
-
-            with pytest.raises(ValueError, match="world size"):
-                other.add_operation([a], [b], instances[0])
+def test_all_gather_bindings_on_both_axes():
+    for world_size in [2, 3]:
+        for axis in [0, 1]:
+            data = json.loads(gather(axis=axis, world_size=world_size).metadata_json())
+            assert data["world_size"] == world_size
+            assert "loop" in data["statements"][0]
+            shape = list(data["values"][data["output"]["value"]]["shape"])
+            assert shape[axis] == 128 * world_size

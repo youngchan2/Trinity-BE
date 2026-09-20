@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-mod cuda;
+mod definitions;
 
 mod tensor;
 pub use tensor::{
@@ -14,11 +14,9 @@ pub use tensor::{
 use super::TargetCapability;
 use crate::DType;
 
-/// Returns the target's built-in fusion rules in deterministic order.
-pub fn fusion_rules(target: TargetCapability) -> &'static [&'static dyn crate::FusionRule] {
-    match target {
-        TargetCapability::Cuda(target) => cuda::fusion_rules(target),
-    }
+/// Built-in fusion rules are being rebuilt with the kernel provider pipeline.
+pub fn fusion_rules(_target: TargetCapability) -> &'static [&'static dyn crate::FusionRule] {
+    &[]
 }
 
 /// Enumerates concrete GEMM instances for an already resolved tensor presentation.
@@ -60,7 +58,7 @@ pub fn gemm_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn GemmImplementation] {
     match target {
-        TargetCapability::Cuda(target) => cuda::gemm_implementations(target),
+        TargetCapability::Cuda(target) => definitions::gemm_implementations(target),
     }
 }
 
@@ -69,7 +67,7 @@ pub fn all_gather_implementations(
     target: TargetCapability,
 ) -> &'static [&'static dyn AllGatherImplementation] {
     match target {
-        TargetCapability::Cuda(target) => cuda::all_gather_implementations(target),
+        TargetCapability::Cuda(target) => definitions::all_gather_implementations(target),
     }
 }
 
@@ -88,11 +86,6 @@ impl ImplementationId {
 
 pub trait ImplementationDefinition: Sync {
     fn id(&self) -> ImplementationId;
-
-    /// Optional CUDA specialization owned by this definition.
-    fn cuda(&self) -> Option<&dyn crate::emit::cuda::CudaImplementation> {
-        None
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -176,11 +169,5 @@ impl Hash for ImplementationInstance {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id().hash(state);
         self.attributes.hash(state);
-    }
-}
-
-pub(crate) fn expression_instance(target: TargetCapability) -> ImplementationInstance {
-    match target {
-        TargetCapability::Cuda(target) => cuda::expression_instance(target),
     }
 }

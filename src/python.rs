@@ -1,7 +1,7 @@
 //! Python compiler bindings, compiled as part of the lowering crate.
 
 use crate as tl;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use std::path::PathBuf;
@@ -35,10 +35,6 @@ fn storage(name: &str) -> PyResult<tl::Storage> {
 #[derive(Clone)]
 struct Implementation {
     instance: tl::ImplementationInstance,
-    shapes: Vec<Vec<usize>>,
-    dtypes: Vec<tl::DType>,
-    communication: bool,
-    world_size: Option<usize>,
 }
 
 #[pymethods]
@@ -90,13 +86,7 @@ impl GemmDefinition {
         Ok(tl::gemm_implementations(self.target)[self.index]
             .enumerate([ds[0], ds[1], ds[2]], [&shapes[0], &shapes[1], &shapes[2]])
             .into_iter()
-            .map(|instance| Implementation {
-                instance,
-                shapes: shapes.clone(),
-                dtypes: ds.clone(),
-                communication: false,
-                world_size: None,
-            })
+            .map(|instance| Implementation { instance })
             .collect())
     }
 }
@@ -142,13 +132,7 @@ impl AllGatherDefinition {
         Ok(tl::all_gather_implementations(self.target)[self.index]
             .enumerate(d, [&shapes[0], &shapes[1]], shard_axis, world_size)
             .into_iter()
-            .map(|instance| Implementation {
-                instance,
-                shapes: shapes.clone(),
-                dtypes: vec![d; 2],
-                communication: true,
-                world_size: Some(world_size),
-            })
+            .map(|instance| Implementation { instance })
             .collect())
     }
 }
@@ -279,13 +263,7 @@ impl TensorDefinition {
         };
         Ok(instances
             .into_iter()
-            .map(|instance| Implementation {
-                instance,
-                shapes: shapes.clone(),
-                dtypes: ds.clone(),
-                communication: false,
-                world_size: None,
-            })
+            .map(|instance| Implementation { instance })
             .collect())
     }
 }
@@ -324,12 +302,19 @@ fn broadcast_implementations(target_name: &str) -> PyResult<Vec<TensorDefinition
     tensor_definitions(target_name, TensorFamily::Broadcast)
 }
 
+fn python_index(value: &Bound<'_, PyAny>) -> PyResult<tl::IndexExpr> {
+    if let Ok(n) = value.extract::<i64>() {
+        return Ok(tl::IndexExpr::Constant(n));
+    }
+    let text = value.extract::<String>()?;
+    tl::plan::parse_index(&text).map_err(bad)
+}
+
 #[pyclass(module = "trinity_lowering._compiler")]
 struct PhysicalPlanBuilder {
     builder: Option<tl::PhysicalPlanBuilder>,
-    values: Vec<(tl::ValueInstanceId, tl::DType, Vec<usize>)>,
-    operations: Vec<tl::OperationId>,
-    world_size: usize,
+    values: Vec<tl::ValueInstanceId>,
+    statements: Vec<tl::Statement>,
 }
 
 #[pymethods]
@@ -347,16 +332,17 @@ impl PhysicalPlanBuilder {
                 world_size,
             )),
             values: vec![],
-            operations: vec![],
-            world_size,
+            statements: vec![],
         })
     }
 
+    #[pyo3(signature=(dtype_name, shape, storage_name, *, name=None))]
     fn add_value(
         &mut self,
         dtype_name: &str,
         shape: Vec<usize>,
         storage_name: &str,
+        name: Option<String>,
     ) -> PyResult<usize> {
         if shape.is_empty() || shape.contains(&0) {
             return Err(bad("positive shape required"));
@@ -364,109 +350,109 @@ impl PhysicalPlanBuilder {
 
         let d = dtype(dtype_name)?;
         let s = storage(storage_name)?;
-        let id = self.open()?.add_value(d, shape.clone(), s);
-        self.values.push((id, d, shape));
+        let name = name.unwrap_or_else(|| format!("v{}", self.values.len()));
+        let id = self.open()?.add_named_value(name, d, shape.clone(), s);
+        self.values.push(id);
 
         Ok(self.values.len() - 1)
     }
 
     fn bind_input(&mut self, name: &str, value: usize) -> PyResult<()> {
-        let id = self.value(value)?.0;
+        let id = *self.value(value)?;
         self.open()?.bind_input(name, id);
 
         Ok(())
     }
 
+    /// Registers an explicit operation; implementation selection belongs to Emit.
+    #[pyo3(signature=(inflows, outflows, *, expression))]
     fn add_operation(
         &mut self,
-        inputs: Vec<usize>,
-        outputs: Vec<usize>,
-        implementation: PyRef<'_, Implementation>,
+        inflows: Vec<usize>,
+        outflows: Vec<usize>,
+        expression: &str,
     ) -> PyResult<usize> {
-        let values = inputs
+        let inflows = inflows
             .iter()
-            .chain(outputs.iter())
-            .map(|i| self.value(*i))
+            .map(|&i| self.value(i).copied())
             .collect::<PyResult<Vec<_>>>()?;
-        if implementation
-            .world_size
-            .is_some_and(|w| w != self.world_size)
-        {
-            return Err(bad("implementation world size differs from builder"));
-        }
-        if outputs.len() != 1
-            || inputs.len() + 1 != implementation.dtypes.len()
-            || values.iter().map(|v| v.1).collect::<Vec<_>>() != implementation.dtypes
-            || values.iter().map(|v| v.2.clone()).collect::<Vec<_>>() != implementation.shapes
-        {
-            return Err(bad(
-                "implementation was enumerated for different operand types/shapes",
-            ));
-        }
-
-        let ins = inputs.iter().map(|i| self.values[*i].0).collect::<Vec<_>>();
-        let outs = outputs
+        let outflows = outflows
             .iter()
-            .map(|i| self.values[*i].0)
-            .collect::<Vec<_>>();
-        let payload = if implementation.communication {
-            tl::OperationPayload::Communication(tl::CommunicationOperation::new(
-                tl::CommunicationKind::AllGather,
-                implementation.instance.clone(),
-            ))
-        } else {
-            tl::OperationPayload::Compute(tl::ComputeOperation::new(
-                implementation.instance.clone(),
-            ))
+            .map(|&i| self.value(i).copied())
+            .collect::<PyResult<Vec<_>>>()?;
+        let expression = self.open()?.parse_expression(expression).map_err(bad)?;
+        let id = self.open()?.add_operation(inflows, outflows, expression);
+        self.statements.push(tl::Statement::Operation(id));
+        Ok(self.statements.len() - 1)
+    }
+
+    /// Creates a loop node from explicitly supplied bounds and child statement IDs.
+    /// Pass root node IDs to build in execution order.
+    fn add_loop(
+        &mut self,
+        kind: &str,
+        variable: &str,
+        start: &Bound<'_, PyAny>,
+        stop: &Bound<'_, PyAny>,
+        step: &Bound<'_, PyAny>,
+        body: Vec<usize>,
+    ) -> PyResult<usize> {
+        self.open()?;
+        let kind = match kind {
+            "parallel" | "ploop" => tl::LoopKind::Parallel,
+            "sequential" | "sloop" => tl::LoopKind::Sequential,
+            _ => return Err(bad("expected parallel or sequential loop")),
         };
-
-        let id = self.open()?.add_operation(ins, outs, payload);
-        self.operations.push(id);
-
-        Ok(self.operations.len() - 1)
+        let domain = tl::LoopDomain {
+            variable: variable.into(),
+            start: python_index(start)?,
+            stop: python_index(stop)?,
+            step: python_index(step)?,
+        };
+        let body = self.statement_nodes(&body)?;
+        self.statements
+            .push(tl::Statement::Loop(tl::Loop { kind, domain, body }));
+        Ok(self.statements.len() - 1)
     }
 
-    fn add_statement(&mut self, operations: Vec<usize>) -> PyResult<()> {
-        let ids = operations
-            .iter()
-            .map(|i| {
-                self.operations
-                    .get(*i)
-                    .copied()
-                    .ok_or_else(|| bad("unknown operation"))
-            })
-            .collect::<PyResult<Vec<_>>>()?;
-
-        if ids.len() != 1 {
-            return Err(bad(
-                "Python builder add_statement accepts exactly one operation ID",
-            ));
-        }
-
-        self.open()?.add_statement(tl::Statement::Operation(ids[0]));
-
-        Ok(())
-    }
-
-    fn finalize(&mut self, output_name: &str, output: usize) -> PyResult<PhysicalPlan> {
-        let id = self.value(output)?.0;
+    /// Builds a plan from root node IDs in execution order.
+    fn build(
+        &mut self,
+        statements: Vec<usize>,
+        output_name: &str,
+        output: usize,
+    ) -> PyResult<PhysicalPlan> {
+        let statements = self.statement_nodes(&statements)?;
+        let id = *self.value(output)?;
         let b = self
             .builder
             .take()
             .ok_or_else(|| bad("builder is finalized"))?;
 
-        Ok(PhysicalPlan(b.finalize(output_name, id).map_err(bad)?))
+        Ok(PhysicalPlan(
+            b.build(statements, output_name, id).map_err(bad)?,
+        ))
     }
 }
 
 impl PhysicalPlanBuilder {
+    fn statement_nodes(&self, ids: &[usize]) -> PyResult<Vec<tl::Statement>> {
+        ids.iter()
+            .map(|&id| {
+                self.statements
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| bad("unknown statement"))
+            })
+            .collect()
+    }
     fn open(&mut self) -> PyResult<&mut tl::PhysicalPlanBuilder> {
         self.builder
             .as_mut()
             .ok_or_else(|| bad("builder is finalized"))
     }
 
-    fn value(&self, i: usize) -> PyResult<&(tl::ValueInstanceId, tl::DType, Vec<usize>)> {
+    fn value(&self, i: usize) -> PyResult<&tl::ValueInstanceId> {
         self.values.get(i).ok_or_else(|| bad("unknown value"))
     }
 }
@@ -476,14 +462,14 @@ struct PhysicalPlan(tl::PhysicalPlan);
 
 #[pyfunction]
 #[pyo3(signature=(text, symbols, dtypes, target_name="hopper", world_size=1))]
-fn lower_loop_ir(
+fn lower_ir(
     text: &str,
     symbols: std::collections::BTreeMap<String, i64>,
     dtypes: std::collections::BTreeMap<String, String>,
     target_name: &str,
     world_size: usize,
 ) -> PyResult<Vec<PhysicalPlan>> {
-    let config = tl::LoopIrConfig {
+    let config = tl::IrConfig {
         target: target(target_name)?,
         world_size,
         symbols,
@@ -492,9 +478,18 @@ fn lower_loop_ir(
             .map(|(n, d)| Ok((n, dtype(&d)?)))
             .collect::<PyResult<_>>()?,
     };
-    tl::lower_loop_ir(text, &config)
+    tl::lower_ir(text, &config)
         .map(|plans| plans.into_iter().map(PhysicalPlan).collect())
         .map_err(bad)
+}
+
+fn statement_metadata(s: &tl::Statement) -> serde_json::Value {
+    let mut data = serde_json::json!({"operations": s.operations().iter().map(|id| id.index()).collect::<Vec<_>>()});
+    if let tl::Statement::Loop(l) = s {
+        data["loop"] = serde_json::json!({"kind": match l.kind { tl::LoopKind::Parallel => "parallel", tl::LoopKind::Sequential => "sequential" },
+            "domain": l.domain, "body": l.body.iter().map(statement_metadata).collect::<Vec<_>>()});
+    }
+    data
 }
 
 #[pymethods]
@@ -510,8 +505,8 @@ impl PhysicalPlan {
             "inputs":self.0.inputs().iter().map(|b|serde_json::json!({"name":b.tensor(),"value":b.value().index()})).collect::<Vec<_>>(),
             "output":{"name":self.0.output().tensor(),"value":self.0.output().value().index()},
             "values":self.0.value_instances().map(|(id,v)|serde_json::json!({"value":id.index(),"dtype":v.dtype(),"shape":v.shape(),"storage":format!("{:?}",v.storage()).to_lowercase()})).collect::<Vec<_>>(),
-            "operations":self.0.operations().map(|(id,o)|serde_json::json!({"id":id.index(),"inputs":o.inputs().iter().map(|v|v.index()).collect::<Vec<_>>(),"outputs":o.outputs().iter().map(|v|v.index()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-            "statements":self.0.statements().iter().map(|s|serde_json::json!({"operations":s.operations().iter().map(|o|o.index()).collect::<Vec<_>>()})).collect::<Vec<_>>()
+            "operations":self.0.operations().map(|(id,o)|serde_json::json!({"id":id.index(),"inflows":o.inflows().iter().map(|v|v.index()).collect::<Vec<_>>(),"outflows":o.outflows().iter().map(|v|v.index()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "statements":self.0.statements().iter().map(statement_metadata).collect::<Vec<_>>()
         }).to_string()
     }
 }
@@ -534,7 +529,11 @@ impl CudaSource {
 #[pyfunction]
 fn emit(py: Python<'_>, plan: PyRef<'_, PhysicalPlan>) -> PyResult<CudaSource> {
     let p = plan.0.clone();
-    py.allow_threads(move || tl::emit(&p).map(CudaSource).map_err(bad))
+    py.allow_threads(move || {
+        tl::emit(&p)
+            .map(CudaSource)
+            .map_err(|e| PyNotImplementedError::new_err(e.to_string()))
+    })
 }
 
 #[pyclass(frozen, module = "trinity_lowering._compiler")]
@@ -671,7 +670,7 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reduce_sum_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(broadcast_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(emit, m)?)?;
-    m.add_function(wrap_pyfunction!(lower_loop_ir, m)?)?;
+    m.add_function(wrap_pyfunction!(lower_ir, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
 
     Ok(())

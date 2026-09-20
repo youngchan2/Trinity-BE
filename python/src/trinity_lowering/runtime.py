@@ -280,13 +280,8 @@ class LoadedModule:
             chosen = maximum if workers is None else workers
 
             def validate_workers():
-                if (
-                    type(chosen) is not int
-                    or not self.requirements.minimum_workers <= chosen <= maximum
-                ):
-                    raise ValueError(
-                        f"workers must be within [{self.requirements.minimum_workers}, {maximum}]"
-                    )
+                if type(chosen) is not int or not 1 <= chosen <= maximum:
+                    raise ValueError(f"workers must be within [1, {maximum}]")
 
             self._stage("prepare.workers", validate_workers)
 
