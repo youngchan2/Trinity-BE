@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass
 from types import MappingProxyType
 
+TARGET_CAPABILITIES = {"hopper": (9, 0), "sm89": (8, 9), "sm120": (12, 0)}
+
 
 def freeze(value):
     if isinstance(value, dict):
@@ -50,7 +52,7 @@ def _positive(value, name):
 
 
 def requirements(data):
-    if data["target"] != "hopper":
+    if data["target"] not in TARGET_CAPABILITIES:
         raise ValueError("unsupported artifact target")
 
     _positive(data["world_size"], "world_size")
@@ -99,6 +101,8 @@ def requirements(data):
         raise ValueError("exactly one output binding required")
 
     persistent = data["world_size"] > 1
+    if persistent and data["target"] != "hopper":
+        raise ValueError("persistent artifacts require Hopper")
     if data["nvshmem"] != persistent or data["workspace_symmetric"] != persistent:
         raise ValueError("inconsistent world/workspace mode")
     _positive(data["workspace_alignment"], "workspace alignment")

@@ -32,12 +32,6 @@ pub fn compile_with_config(
     }
 
     let requirements = source.requirements();
-    if requirements.target != CudaTargetCapability::Hopper {
-        return Err(CompileError::Configuration(
-            "unsupported CUDA target".into(),
-        ));
-    }
-
     let toolchain = config::resolve(config, requirements.nvshmem)?;
     let version = invoke(&toolchain.compiler, vec!["--version".into()], source.code())?;
 

@@ -186,7 +186,7 @@ fn loops(plan: &PhysicalPlan) -> Vec<&Loop> {
 }
 
 fn candidates(plan: &PhysicalPlan, execution: ExecutionModel) -> Vec<SpecifiedKernel> {
-    let prepared = prepare(plan);
+    let prepared = prepare(plan).unwrap();
     let loops = loops(plan);
     let Statement::Operation(operation) = loops.last().unwrap().body[0] else {
         panic!("GEMM")

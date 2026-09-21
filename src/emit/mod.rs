@@ -1,12 +1,11 @@
-//! Entry point for the kernel-provider emitter under construction.
-//! The previous CUDA pipeline is reference-only under old/emit-rewrite.
+//! Provider selection, native composition, and CUDA emission.
 
 use crate::{CudaSource, PhysicalPlan};
 use thiserror::Error;
 
 mod collect;
-#[expect(dead_code)]
 mod combine;
+mod cuda;
 mod execution;
 mod prepare;
 #[expect(dead_code)]
@@ -14,10 +13,14 @@ mod provider;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EmitError {
-    #[error(
-        "CUDA emission pipeline is incomplete; execution planning and CUDA rendering are not connected"
-    )]
+    #[error("the requested CUDA emission pipeline is unavailable")]
     Unavailable,
+    #[error("unsupported CUDA execution: {reason}")]
+    UnsupportedExecution { reason: String },
+    #[error("invalid CUDA execution: {reason}")]
+    InvalidExecution { reason: String },
+    #[error("CUDA rendering failed: {message}")]
+    Render { message: String },
     #[error("provider {provider} failed for operation {operation}: {message}")]
     Provider {
         operation: usize,
@@ -34,13 +37,18 @@ pub enum EmitError {
 }
 
 /// Selects kernels per operation and combines compatible kernels from the same provider.
-/// The remaining emission pipeline is not yet available.
+/// Streamed execution uses one CTA per parallel coordinate. Persistent emission
+/// remains unavailable while its task and scheduler planning is rebuilt.
 pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
-    let prepared = prepare::prepare(plan);
+    if plan.world_size() != 1 {
+        return Err(EmitError::UnsupportedExecution {
+            reason: "Persistent emission is not implemented".into(),
+        });
+    }
+    let prepared = prepare::prepare(plan)?;
     let execution = execution::plan_execution(prepared.plan);
     let provider = provider::CuTeKernelProvider;
     let selected = collect::collect(&prepared, execution, &[&provider])?;
-    let _combined = combine::combine(&prepared, execution, selected)?;
-
-    Err(EmitError::Unavailable)
+    let combined = combine::combine(&prepared, execution, selected)?;
+    cuda::emit(prepared, &combined)
 }

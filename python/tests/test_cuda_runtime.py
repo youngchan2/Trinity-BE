@@ -153,7 +153,7 @@ def collect_until(fn):
 
 def test_real_device_admission():
     if torch.cuda.get_device_capability(0) != (9, 0):
-        with pytest.raises(ValueError, match="Hopper"):
+        with pytest.raises(ValueError, match="hopper"):
             device_of("cuda:0")
     else:
         assert device_of("cuda:0") == torch.device("cuda:0")

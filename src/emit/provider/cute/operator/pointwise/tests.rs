@@ -77,7 +77,7 @@ fn program(
 }
 
 fn candidates(plan: &PhysicalPlan) -> Vec<SpecifiedKernel> {
-    let prepared = prepare(plan);
+    let prepared = prepare(plan).unwrap();
     let provider = CuTeKernelProvider;
     match collect(&prepared, plan_execution(plan), &[&provider]) {
         Ok(selected) => selected
@@ -177,7 +177,7 @@ fn execution_models_share_the_same_specification_and_body() {
         "(keyed_index)",
         vec![],
     );
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let operation = plan.operations().next().unwrap().0;
     let specifications: Vec<_> = [
         crate::emit::execution::ExecutionModel::CudaStreamed,

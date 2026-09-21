@@ -48,6 +48,7 @@ impl Case {
     fn plan(&self) -> PhysicalPlan {
         let mut builder =
             PhysicalPlanBuilder::new(TargetCapability::Cuda(CudaTargetCapability::Hopper), 1);
+
         let a = builder.add_named_value("A", DType::Bf16, [self.m, self.k()], Storage::External);
         let b = builder.add_named_value("B", DType::Bf16, [self.k(), self.n()], Storage::External);
         let c = builder.add_named_value(
@@ -56,20 +57,24 @@ impl Case {
             [self.m, self.n()],
             Storage::External,
         );
+
         builder.bind_input("A", a);
         builder.bind_input("B", b);
         let mi = I::ClippedTile {
             variable: "m".into(),
             width: self.rows,
         };
+
         let ni = I::Tile {
             variable: "n".into(),
             width: 128,
         };
+
         let ki = I::Tile {
             variable: "k".into(),
             width: self.width,
         };
+
         let output = TensorAccess::new(c, [mi.clone(), ni.clone()]);
         let op = builder.add_operation(
             [a, b],
@@ -85,6 +90,7 @@ impl Case {
                 ]))),
             },
         );
+
         let mut statement = Statement::Operation(op);
         for (kind, name, start, step, count) in [
             (
@@ -113,7 +119,7 @@ impl Case {
 }
 
 fn specify(plan: &PhysicalPlan, execution: ExecutionModel) -> HopperGemmSpecification {
-    let prepared = prepare(plan);
+    let prepared = prepare(plan).unwrap();
     let mut loops = Vec::new();
     let mut statement = &plan.statements()[0];
     while let Statement::Loop(l) = statement {

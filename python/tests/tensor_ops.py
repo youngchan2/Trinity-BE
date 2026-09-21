@@ -10,8 +10,8 @@ from plan_syntax import all_gather, index, load, store
 
 
 class Builder:
-    def __init__(self, world_size=1):
-        self.builder = tl.PhysicalPlanBuilder(world_size)
+    def __init__(self, world_size=1, target="hopper"):
+        self.builder = tl.PhysicalPlanBuilder(world_size, target)
         self.values = []
         self.statements = []
 
@@ -29,8 +29,8 @@ class Builder:
         output = self.value(dtype, shape, storage)
         if name == "reduce_sum":
             access = index("(tile row 1)")
-            value = load(inflows[0], self.values[inflows[0]][1], index("(tile row 1)", "fulltile"))
-            rhs = f"(rsum {value} 1)"
+            value = load(inflows[0], self.values[inflows[0]][1], index("(tile row 1)", "(clipped_tile k 128)"))
+            rhs = f"(+ {load(output, shape, access)} (rsum {value} 1))"
         else:
             parts = (
                 ["(clipped_tile col 128)"]
@@ -58,6 +58,7 @@ class Builder:
         body = store(output, shape, rhs, access)
         node = self.builder.add_operation(inflows, [output], expression=body)
         if name == "reduce_sum":
+            node = self.builder.add_loop("sequential", "k", 0, self.values[inflows[0]][1][1], 128, [node])
             node = self.builder.add_loop("parallel", "row", 0, shape[0], 1, [node])
         else:
             node = self.builder.add_loop(

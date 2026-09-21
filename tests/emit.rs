@@ -10,8 +10,11 @@ fn identity() -> PhysicalPlan {
 }
 
 #[test]
-fn even_identity_emission_reports_the_missing_pipeline() {
-    assert!(matches!(emit(&identity()), Err(EmitError::Unavailable)));
+fn identity_emits_an_abi_without_kernel_launches() {
+    let source = emit(&identity()).unwrap();
+    assert!(!source.code().contains("<<<"));
+    assert!(source.code().contains("trinity_launch"));
+    assert_eq!(source.requirements().buffers[0].alignment, 4);
 }
 
 struct UncheckedRule;

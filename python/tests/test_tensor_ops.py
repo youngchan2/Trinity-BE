@@ -22,6 +22,10 @@ def test_primitive_plans_and_metadata(shape):
         dtypes = ["bf16", "fp32", "bf16"] if name in ("add", "mul", "div") else ["bf16", "fp32"]
         attrs = {"scalar": 4096.0} if name == "scalar_div" else {}
         for world in (1, 2):
+            if world == 2:
+                with pytest.raises(NotImplementedError, match="Persistent"):
+                    tl.emit(pointwise(name, shape, dtypes, world, **attrs))
+                continue
             source = tl.emit(pointwise(name, shape, dtypes, world, **attrs))
             buffers = source.requirements.buffers
             assert all(b.shape == shape for b in buffers)

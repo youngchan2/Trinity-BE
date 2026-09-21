@@ -13,13 +13,14 @@ from tensor_ops import gated_silu, normalization
 from plan_syntax import all_gather, index
 
 
-def test_emit_reports_the_missing_pipeline():
+def test_identity_emits_without_a_launch():
     b = tl.PhysicalPlanBuilder()
     x = b.add_value("fp32", [4], "external")
     b.bind_input("X", x)
     plan = b.build([], "Y", x)
-    with pytest.raises(NotImplementedError, match="emission pipeline is incomplete"):
-        tl.emit(plan)
+    source = tl.emit(plan)
+    assert "<<<" not in source.code
+    assert source.requirements.buffers[0].alignment == 4
 
 
 def copy_builder():

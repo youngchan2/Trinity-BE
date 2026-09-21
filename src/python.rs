@@ -13,7 +13,11 @@ fn bad(error: impl std::fmt::Display) -> PyErr {
 fn target(name: &str) -> PyResult<tl::TargetCapability> {
     match name {
         "hopper" | "sm_90a" => Ok(tl::TargetCapability::Cuda(tl::CudaTargetCapability::Hopper)),
-        _ => Err(bad("only Hopper/sm_90a is supported")),
+        "sm89" | "sm_89" => Ok(tl::TargetCapability::Cuda(tl::CudaTargetCapability::Sm89)),
+        "sm120" | "sm_120" => Ok(tl::TargetCapability::Cuda(tl::CudaTargetCapability::Sm120)),
+        _ => Err(bad(
+            "supported targets: hopper/sm_90a, sm89/sm_89, sm120/sm_120",
+        )),
     }
 }
 
@@ -530,9 +534,17 @@ impl CudaSource {
 fn emit(py: Python<'_>, plan: PyRef<'_, PhysicalPlan>) -> PyResult<CudaSource> {
     let p = plan.0.clone();
     py.allow_threads(move || {
-        tl::emit(&p)
-            .map(CudaSource)
-            .map_err(|e| PyNotImplementedError::new_err(e.to_string()))
+        tl::emit(&p).map(CudaSource).map_err(|e| match e {
+            tl::EmitError::Unavailable
+            | tl::EmitError::UnsupportedExecution { .. }
+            | tl::EmitError::NoProvider { .. } => PyNotImplementedError::new_err(e.to_string()),
+            tl::EmitError::InvalidExecution { .. } | tl::EmitError::Combination { .. } => {
+                PyValueError::new_err(e.to_string())
+            }
+            tl::EmitError::Provider { .. } | tl::EmitError::Render { .. } => {
+                PyRuntimeError::new_err(e.to_string())
+            }
+        })
     })
 }
 

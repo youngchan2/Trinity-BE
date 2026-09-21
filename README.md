@@ -1,11 +1,10 @@
 # trinity-lowering
 
-> CUDA emission is being rebuilt. The previous emitter and CUDA code generators
-> are reference-only under [old/emit-rewrite](old/emit-rewrite/README.md).
-> Explicit IR and Builder planning remain available. Whole-tensor Candidate
-> lowering returns `ExplicitProgramRequired`; `emit()` returns an unavailable error
-> (`NotImplementedError` in Python). The emission/execution examples below describe
-> the functionality to restore with the new provider pipeline.
+> Native Streamed emission is connected for Hopper, sm_89 and sm_120. Explicit
+> IR/Builder plans can generate CUDA artifacts using pointwise, reduction, GEMM
+> and Register continuations. Persistent, communication, Shared tensor transport
+> and Opaque emission remain unsupported. The previous emitter is reference-only
+> under [old/emit-rewrite](old/emit-rewrite/README.md).
 
 Generate Triton kernels from extracted, scheduled Trinity IR, or construct explicit
 tensor program plans for the CUDA provider pipeline.
@@ -16,7 +15,7 @@ tensor program plans for the CUDA provider pipeline.
 | Explicit IR with symbol and dtype bindings | `lower_ir(text, config)` | `PhysicalPlan` values for the CUDA provider pipeline |
 | Explicit values, operations and loops | `PhysicalPlanBuilder::build(...)` | A validated `PhysicalPlan` |
 
-The Triton fallback remains available independently of the CUDA emitter rebuild.
+The Triton fallback remains available independently of the native CUDA emitter.
 It uses `analysis::ProgramAnalysis` and `triton::ProgramPlan`; the updated CUDA path
 uses `plan::PhysicalPlan`. Automatic conversion and cross-backend selection are not
 connected yet. Triton currently stores tensors as FP16; CUDA plans carry explicit
@@ -26,8 +25,8 @@ Rust handles implementation selection, physical plan validation, CUDA emission,
 and compilation. The Python API binds Tensors to a C++ runtime that owns native
 loading and execution.
 
-The CUDA backend targets NVIDIA Hopper (`sm_90a`), with streamed execution for
-single-GPU programs and persistent execution using NVSHMEM for multi-GPU programs.
+The CUDA backend emits single-GPU Streamed programs for `sm_90a`, `sm_89` and
+`sm_120`. The retained NVSHMEM runtime is not yet connected to the new emitter.
 
 Contiguous BF16/FP32 vectors and matrices support pointwise arithmetic, ReLU,
 row sums and explicit row broadcasting. See the
@@ -52,7 +51,7 @@ sources, examples, and tests live under `python/`.
 | [src/triton/codegen](src/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
 | [src/plan](src/plan/) | Physical plan construction and validation |
 | [src/implementation/definitions](src/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
-| [src/emit](src/emit/) | CUDA scope collection, provider selection and kernel composition; final execution/rendering still incomplete |
+| [src/emit](src/emit/) | CUDA scope collection, provider selection, kernel composition, execution placement and rendering |
 | [src/compile/cuda](src/compile/cuda/) | NVCC compilation and artifact ownership |
 | [src/python.rs](src/python.rs) | Python compiler bindings |
 | [src/native](src/native/) | Tensor execution, NVSHMEM, and CUDA Graph runtime |
@@ -86,8 +85,7 @@ NVSHMEM.
 
 Python IR reader tests use the checked-in `tests/fixtures/ir` fixtures. The optional
 FFN GPU benchmark requires an enclosing workspace's `examples/ffn_v3/run.py` and
-skips when that harness is unavailable. Legacy Python tests that expect CUDA
-emission remain blocked by the upstream emitter rebuild.
+skips when that harness is unavailable.
 
 ## Triton source generation
 
@@ -129,7 +127,13 @@ an explicit loop program. Its automatic expansion path has been retired and now
 returns `LoweringError::ExplicitProgramRequired`. Candidate extraction itself is
 unchanged; reconnecting it requires a separate explicit-program contract.
 
-Compiler/runtime and provider work follows the current
-[PLAN.md](../../docs/draft/PLAN.md). Existing fusion and emission implementations
-are reference-only under `old/emit-rewrite`; the scope/provider pipeline is not yet
-implemented. Structural plan validation is not a proof of device execution legality.
+Emission supports independent constant parallel domains and constant sequential
+loops within a CTA. Dependent bounds and parallel work inside a sequential loop
+are rejected. Execution placement checks region coverage and inter-CTA hazards,
+then renders a shared device body, Streamed wrappers and the existing host ABI.
+Kernel launch thread counts and scratch sizes are resolved individually.
+
+Compiler/runtime work follows [PLAN.md](../../docs/draft/PLAN.md). Public fusion
+candidate generation remains unavailable. Structural plan validation is not a
+proof of device execution legality; CUDA compilation and GPU accuracy require
+separate verification.

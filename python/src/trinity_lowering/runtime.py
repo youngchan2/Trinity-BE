@@ -13,7 +13,7 @@ from types import MappingProxyType
 
 from .compiler import CudaArtifact
 from .errors import ResourceBusy
-from .metadata import freeze, manifest
+from .metadata import TARGET_CAPABILITIES, freeze, manifest
 
 _native_module = None
 _import_lock = threading.Lock()
@@ -44,7 +44,7 @@ def native():
     return _native_module
 
 
-def device_of(device):
+def device_of(device, target="hopper"):
     import torch
 
     d = torch.device(device)
@@ -54,8 +54,10 @@ def device_of(device):
     if d.index is None:
         d = torch.device("cuda", torch.cuda.current_device())
 
-    if torch.cuda.get_device_capability(d) != (9, 0):
-        raise ValueError("this artifact requires a Hopper sm_90a device")
+    if target not in TARGET_CAPABILITIES:
+        raise ValueError("unsupported artifact target")
+    if torch.cuda.get_device_capability(d) != TARGET_CAPABILITIES[target]:
+        raise ValueError(f"this artifact requires a {target} device")
 
     return d
 
@@ -420,15 +422,14 @@ class PreparedExecution:
 
 def load(artifact_or_directory, device, world=None):
     def local_load():
-        d = device_of(device)
-        outside_capture(d)
-        if world and d != world.device:
-            raise ValueError("module must use its world's device")
-
         artifact = artifact_or_directory
         with artifact._lock if isinstance(artifact, CudaArtifact) else nullcontext():
             directory = artifact.directory if isinstance(artifact, CudaArtifact) else Path(artifact)
             data, req = manifest((directory / "manifest.json").read_text())
+            d = device_of(device, req.target)
+            outside_capture(d)
+            if world and d != world.device:
+                raise ValueError("module must use its world's device")
 
             if req.nvshmem != (world is not None) or (world and world.size != req.world_size):
                 raise ValueError("artifact requires a matching world")

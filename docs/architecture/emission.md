@@ -3,9 +3,10 @@
 [`PhysicalPlan`](planning.md)에 표현된 연산과 Loop 구조에 맞는 구현을 선택하고,
 선택된 구현을 결합하여 실행 계획과 코드를 생성한다.
 
-이 문서는 Emit 재구성을 위한 구조 초안이다. 각 구성 요소의 역할과 경계를 먼저 정리하며,
-구체적인 내부 자료구조와 Provider 인터페이스는 후속 설계에서 확정한다.
-현재 [`emit()`](../../src/emit/mod.rs)은 `EmitError::Unavailable`을 반환한다.
+현재 [`emit()`](../../src/emit/mod.rs)은 prepare → provider 선택 → combine → CUDA 실행 배치
+→ region 검증 → render를 거쳐 Native Streamed `CudaSource`를 반환한다. Hopper·sm_89·sm_120의
+pointwise/reduction/GEMM과 Register 결합을 지원한다. Persistent와 Opaque 관련 내용은
+후속 설계이며, 현재 실행 경로에는 연결되지 않았다.
 
 ## Kernel
 
@@ -166,7 +167,18 @@ launch 구성을 확정한다. 구현에 종속적인 자원 배치는 선택과
 ### Streamed
 
 일반 CUDA kernel의 grid에 작업을 배치하고, kernel 간 실행 순서로 의존성을 보장한다.
-Native 본문과 Opaque의 launch 계약을 실행 계획에 연결한다.
+현재 구현은 Native만 지원한다. 상수 parallel domain을 직사각형 grid로 평탄화하고
+CTA마다 좌표를 계산한다. 일반 sequential loop는 CTA 안에 남기며 하위 본문의 thread 수가
+일치해야 한다. 의존적인 bound와 sequential 내부 parallel loop는 미지원이다.
+
+실행 배치는 kernel별 thread·shared scratch와 buffer alignment를 확정한다. Region 검증은
+좌표를 CPU에서 방문해 중간값의 coverage와 CTA 간 read/write·write/write 충돌을 검사한다.
+최종 출력 coverage도 확인한다. CUDA에 좌표별 테이블을 생성하지 않으며, 계산 본문은
+binding·좌표·scratch를 받는 device 함수로 wrapper와 분리한다.
+
+큰 grid는 block base를 갖는 여러 launch로 나누고 동일 stream에서 순서대로 제출한다.
+`CudaRequirements`의 thread/shared 필드는 kernel별 요구의 최댓값이며 실제 launch는
+각 kernel의 값을 사용한다. Host ABI v1은 유지한다. Opaque launch는 후속 작업이다.
 
 ### Persistent
 
@@ -222,8 +234,8 @@ Target과 rank 수, 버퍼 binding, workspace, shared memory, thread 구성과
 
 ## 다음 단계
 
-구현은 Native pointwise 하나의 Streamed 실행, 연속 pointwise 결합,
-GEMM의 순차 Loop와 전후 처리, 동일 Native 본문의 Persistent 실행 순서로 확장한다.
+Native Streamed의 소스 생성·compile/runtime 연결을 바탕으로 GPU 수치 검증,
+일반 실행 분석의 확장, Shared 전달과 통신, 동일 Native 본문의 Persistent 실행 순서로 확장한다.
 Opaque는 반환 형태와 선택 조건을 먼저 정의하고 실제 외부 kernel 연동은 이후에 진행한다.
 세부 구현 순서는 [Emit 재구성 계획](../../../../docs/draft/PLAN.md#emit-재구성-단계별-계획--2026-09-16)을 참고한다.
 

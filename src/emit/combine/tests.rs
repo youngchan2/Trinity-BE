@@ -176,7 +176,7 @@ fn bodies(statements: &[CombinedStatement]) -> Vec<&CombinedBody> {
 #[test]
 fn forwards_registers_in_each_producers_output_scope_with_rounding_and_fanout() {
     for plan in pipelines() {
-        let prepared = prepare(&plan);
+        let prepared = prepare(&plan).unwrap();
         let provider = CuTeKernelProvider;
         let selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
         let combined = combine(&prepared, plan_execution(&plan), selected).unwrap();
@@ -217,7 +217,7 @@ fn forwards_registers_in_each_producers_output_scope_with_rounding_and_fanout() 
 #[test]
 fn global_values_keep_stores_and_uniform_barriers() {
     let plan = pipeline(0, Storage::Global);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let provider = CuTeKernelProvider;
     let selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
     let combined = combine(&prepared, plan_execution(&plan), selected).unwrap();
@@ -270,7 +270,7 @@ impl KernelProvider for RecordingProvider {
 #[test]
 fn selects_first_supported_provider_per_operation_in_both_execution_models() {
     let plan = pipeline(0, Storage::Register);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     for execution in [ExecutionModel::CudaStreamed, ExecutionModel::CudaPersistent] {
         let first = RecordingProvider::new(None);
         let second = RecordingProvider::new(None);
@@ -298,7 +298,7 @@ fn selects_first_supported_provider_per_operation_in_both_execution_models() {
 #[test]
 fn different_providers_share_a_plan_but_never_a_body_even_with_matching_names() {
     let plan = pipeline(0, Storage::Global);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     for execution in [ExecutionModel::CudaStreamed, ExecutionModel::CudaPersistent] {
         for unsupported_operation in [1, 2] {
             let first = RecordingProvider::new(Some(unsupported_operation));
@@ -345,7 +345,7 @@ fn different_providers_share_a_plan_but_never_a_body_even_with_matching_names() 
 #[test]
 fn register_edges_cannot_cross_providers_or_trigger_reselection() {
     let plan = pipeline(0, Storage::Register);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     for execution in [ExecutionModel::CudaStreamed, ExecutionModel::CudaPersistent] {
         let first = RecordingProvider::new(Some(1));
         let second = RecordingProvider::new(None);
@@ -375,7 +375,7 @@ fn cta_size_is_resolved_for_the_whole_body_without_mutating_specifications() {
         let provider = CuTeKernelProvider;
         for &(policies, threads) in cases {
             let plan = pipeline(0, Storage::Global);
-            let prepared = prepare(&plan);
+            let prepared = prepare(&plan).unwrap();
             let mut selected = collect(&prepared, execution, &[&provider]).unwrap();
             for (kernel, supported) in selected.kernels.values_mut().zip(policies) {
                 kernel.specification.requirements_mut().thread_policy =
@@ -407,7 +407,7 @@ fn cta_size_is_resolved_for_the_whole_body_without_mutating_specifications() {
         // is a flexible pointwise partition or a fixed GEMM fragment.
         for (producer, threads) in [(0, 256), (1, 128)] {
             let plan = pipeline(producer, Storage::Register);
-            let prepared = prepare(&plan);
+            let prepared = prepare(&plan).unwrap();
             let mut selected = collect(&prepared, execution, &[&provider]).unwrap();
             if producer == 0 {
                 selected
@@ -506,7 +506,7 @@ fn subgroup_pipeline() -> PhysicalPlan {
 fn subgroup_guards_cover_accumulation_and_followers_but_not_cta_barriers() {
     let plan = subgroup_pipeline();
     let provider = CuTeKernelProvider;
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     for execution in [ExecutionModel::CudaStreamed, ExecutionModel::CudaPersistent] {
         let mut selected = collect(&prepared, execution, &[&provider]).unwrap();
         let requirements = selected
@@ -538,7 +538,7 @@ fn subgroup_guards_cover_accumulation_and_followers_but_not_cta_barriers() {
 fn subgroup_participation_requires_whole_warps() {
     let plan = subgroup_pipeline();
     let provider = CuTeKernelProvider;
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let mut selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
     selected
         .kernels
@@ -565,7 +565,7 @@ fn mixed_thread_bodies_compile_with_nvcc() {
         .iter()
         .enumerate()
     {
-        let prepared = prepare(plan);
+        let prepared = prepare(plan).unwrap();
         let provider = CuTeKernelProvider;
         let mut selected = collect(&prepared, plan_execution(plan), &[&provider]).unwrap();
         let requirements = selected
@@ -627,7 +627,7 @@ fn resources_split_memory_bodies_but_never_spill_registers() {
     for storage in [Storage::Global, Storage::Register] {
         for flexible in [false, true] {
             let plan = pipeline(0, storage);
-            let prepared = prepare(&plan);
+            let prepared = prepare(&plan).unwrap();
             let mut selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
             for (index, kernel) in selected.kernels.values_mut().enumerate() {
                 kernel.specification.requirements_mut().thread_policy = if flexible {
@@ -656,7 +656,7 @@ fn resources_split_memory_bodies_but_never_spill_registers() {
         }
     }
     let plan = pipeline(1, Storage::Register);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let mut selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
     let SpecifiedKernel::CuTeHopperGemm(s) =
         &mut selected.kernels.values_mut().next().unwrap().specification
@@ -675,7 +675,7 @@ fn rejects_mismatched_access_and_collective_consumption_of_register_elements() {
     let provider = CuTeKernelProvider;
     for collective in [false, true] {
         let plan = pipeline(0, Storage::Register);
-        let prepared = prepare(&plan);
+        let prepared = prepare(&plan).unwrap();
         let mut selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
         let SpecifiedKernel::CuTePointwise(s) =
             &mut selected.kernels.values_mut().nth(1).unwrap().specification
@@ -717,7 +717,7 @@ impl KernelProvider for FailingProvider {
 #[test]
 fn collection_preserves_unsupported_diagnostics_and_propagates_internal_failures() {
     let plan = pipeline(0, Storage::Global);
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let execution = plan_execution(&plan);
     let unsupported = FailingProvider(false);
     let failed = FailingProvider(true);
@@ -764,7 +764,7 @@ fn register_values_do_not_escape_a_loop_or_an_unrelated_output_scope() {
                 output,
             )
             .unwrap();
-        let prepared = prepare(&plan);
+        let prepared = prepare(&plan).unwrap();
         let provider = CuTeKernelProvider;
         let selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
         assert!(matches!(
@@ -810,7 +810,7 @@ fn rewriting_a_register_value_connects_its_latest_definition() {
             output,
         )
         .unwrap();
-    let prepared = prepare(&plan);
+    let prepared = prepare(&plan).unwrap();
     let provider = CuTeKernelProvider;
     let selected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
     let combined = combine(&prepared, plan_execution(&plan), selected).unwrap();

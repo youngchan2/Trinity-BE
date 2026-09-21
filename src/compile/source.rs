@@ -1,5 +1,5 @@
 //! Source and allocation metadata consumed by the existing CUDA compiler.
-//! Execution/body planning is intentionally absent while emit is rebuilt.
+//! Kernel placement is internal to Emit; the host ABI receives allocation metadata.
 
 use crate::CudaTargetCapability;
 use serde::Serialize;
@@ -31,7 +31,9 @@ pub struct CudaRequirements {
     pub workspace_alignment: usize,
     pub workspace_symmetric: bool,
     pub cooperative_launch: bool,
+    /// Maximum across kernels. Each Streamed launch uses its own requirement.
     pub shared_memory_bytes: usize,
+    /// Maximum across kernels (128 for a launch-free identity program).
     pub block_threads: usize,
     pub nvshmem: bool,
     pub nvls: bool,

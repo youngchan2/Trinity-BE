@@ -5,8 +5,13 @@ them with PyTorch Tensors.
 
 ## Explicit program construction
 
-The emitter is being rebuilt: `emit()` currently raises `NotImplementedError`.
-The execution walkthrough below describes the functionality to restore.
+`emit()` supports Native Streamed execution on Hopper, sm_89 and sm_120. Use
+`PhysicalPlanBuilder(target_name="sm_89")` or `lower_ir(..., target_name="sm_89")`
+to select a target; Hopper remains the default. Artifacts require the matching
+device capability. Persistent, communication, Shared tensor transport, rank-3
+Split-K and Opaque emission currently raise `NotImplementedError` or a composition
+error. Loop bounds must be constant; parallel work inside a sequential loop is
+unsupported. Ordinary sequential loops require compatible CTA thread counts.
 
 `PhysicalPlanBuilder` no longer expands whole-tensor operations automatically:
 
@@ -37,7 +42,8 @@ This walkthrough runs a BF16 matrix multiplication with bias addition on one Hop
 
 ### Prerequisites
 
-- Linux x86-64 with a Hopper GPU (`sm_90a`).
+- Linux x86-64 with a matching Hopper (`sm_90a`), Ada (`sm_89`) or RTX Blackwell
+  (`sm_120`) GPU. The walkthrough uses the default Hopper target.
 - CUDA Toolkit 13.0 and a compatible NVIDIA driver.
 - uv, Python 3.12, Rust, and a C++17 compiler.
 
