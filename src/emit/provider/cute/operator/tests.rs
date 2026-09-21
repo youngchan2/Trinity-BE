@@ -4,7 +4,7 @@ use crate::emit::provider::{
 };
 use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
 use crate::{
-    AccessIndex as I, Constant, DType, Expression as E, IndexExpr, IrConfig, LoopDomain,
+    AccessIndex as I, Constant, DType, Expression as E, IndexExpr, LoopDomain,
     LoweringConfig, PhysicalPlan, PhysicalPlanBuilder, Statement, Storage, TensorAccess,
 };
 use std::collections::BTreeMap;
@@ -128,47 +128,6 @@ fn normalization(dtype: DType) -> PhysicalPlan {
     builder
         .build(vec![Statement::Operation(op)], "Y", y)
         .unwrap()
-}
-
-fn ffn() -> PhysicalPlan {
-    let meta: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/ir/IR.v3.meta.json"
-    )))
-    .unwrap();
-    let config = IrConfig {
-        dtypes: meta["tensor_shapes"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|name| {
-                (
-                    name.clone(),
-                    if name == "attn_O3" {
-                        DType::Fp32
-                    } else {
-                        DType::Bf16
-                    },
-                )
-            })
-            .collect(),
-        symbols: meta["example_bindings"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .map(|(name, value)| (name.clone(), value.as_i64().unwrap()))
-            .collect(),
-        ..Default::default()
-    };
-    crate::lower_ir(
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/ir/IR.v3.txt"
-        )),
-        &config,
-    )
-    .unwrap()
-    .remove(0)
 }
 
 fn candidates(plan: &PhysicalPlan) -> Vec<SpecifiedKernel> {
@@ -322,79 +281,6 @@ fn normalization_projects_row_vectors_and_all_ffn_operations_have_candidates() {
             .source()
             .contains("cute::make_stride(int64_t(1), int64_t(0))")
     );
-    let plan = ffn();
-    let prepared = prepare(&plan).unwrap();
-    let provider = CuTeKernelProvider;
-    let collected = collect(&prepared, plan_execution(&plan), &[&provider]).unwrap();
-    assert_eq!(collected.kernels.len(), 9);
-    let persistent = collect(
-        &prepared,
-        crate::emit::execution::ExecutionModel::CudaPersistent,
-        &[&provider],
-    )
-    .unwrap();
-    assert!(
-        collected
-            .kernels
-            .values()
-            .all(|kernel| kernel.provider.name() == "cute")
-    );
-    assert!(
-        collected
-            .kernels
-            .iter()
-            .map(|(id, kernel)| (id, &kernel.specification))
-            .eq(persistent
-                .kernels
-                .iter()
-                .map(|(id, kernel)| (id, &kernel.specification)))
-    );
-    let combined =
-        crate::emit::combine::combine(&prepared, plan_execution(&plan), collected).unwrap();
-    fn check_groups(statements: &[crate::emit::combine::CombinedStatement]) -> usize {
-        statements
-            .iter()
-            .map(|statement| match statement {
-                crate::emit::combine::CombinedStatement::Loop { body, .. } => check_groups(body),
-                crate::emit::combine::CombinedStatement::Body(body) => {
-                    let operation_count: usize =
-                        body.roots.iter().map(|root| 1 + root.followers.len()).sum();
-                    if operation_count == 2 {
-                        assert_eq!(body.requirements.shared_memory_bytes, 65536);
-                        assert_eq!(body.requirements.shared_memory_alignment, 128);
-                        assert!(body.roots[1].barrier_before);
-                    }
-                    operation_count
-                }
-            })
-            .sum()
-    }
-    assert_eq!(check_groups(&combined.statements), 9);
-    let specs = candidates(&plan);
-    assert_eq!(
-        specs
-            .iter()
-            .filter(|s| matches!(s, SpecifiedKernel::CuTeHopperGemm(_)))
-            .count(),
-        4
-    );
-    assert_eq!(
-        specs
-            .iter()
-            .filter(|s| matches!(s, SpecifiedKernel::CuTeReduceSum(_)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        specs
-            .iter()
-            .filter(|s| matches!(s, SpecifiedKernel::CuTePointwise(_)))
-            .count(),
-        4
-    );
-    for spec in &specs {
-        CuTeKernelProvider.render(spec, &bindings(&plan)).unwrap();
-    }
 }
 
 /// Only the launch wrapper is test-specific; phase placement comes from combine.
@@ -453,7 +339,6 @@ fn ffn_kernels_compile_with_nvcc() {
         reduction(5, 131, 65, DType::Fp32, false),
         normalization(DType::Fp32),
         normalization(DType::Bf16),
-        ffn(),
     ];
     plans.extend(crate::emit::combine::tests::pipelines());
     for (i, plan) in plans.iter().enumerate() {

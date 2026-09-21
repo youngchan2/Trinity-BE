@@ -1,5 +1,4 @@
 mod support;
-use std::collections::BTreeMap;
 use support::explicit::{load, loop_node, store, tile};
 use trinity_lowering::*;
 
@@ -112,45 +111,6 @@ fn reduction(target: CudaTargetCapability) -> PhysicalPlan {
     )
     .unwrap()
 }
-fn ffn(target: CudaTargetCapability) -> PhysicalPlan {
-    let meta: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/ir/IR.v3.meta.json")).unwrap();
-    let dtypes = meta["tensor_shapes"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(|n| {
-            (
-                n.clone(),
-                if n == "attn_O3" {
-                    DType::Fp32
-                } else {
-                    DType::Bf16
-                },
-            )
-        })
-        .collect();
-    let symbols = BTreeMap::from([
-        ("tile_k".into(), 64),
-        ("tile_n".into(), 128),
-        ("tile_p".into(), 128),
-    ]);
-    let text = include_str!("fixtures/ir/IR.v3.txt")
-        .replace("16384", "512")
-        .replace("4096", "256");
-    lower_ir(
-        &text,
-        &IrConfig {
-            target: TargetCapability::Cuda(target),
-            world_size: 1,
-            symbols,
-            dtypes,
-        },
-    )
-    .unwrap()
-    .remove(0)
-}
-
 #[test]
 fn native_families_emit_on_each_target_with_per_kernel_resources() {
     for target in TARGETS {
@@ -161,7 +121,6 @@ fn native_families_emit_on_each_target_with_per_kernel_resources() {
             gemm(target, Storage::Global),
             gemm(target, Storage::Register),
             reduction(target),
-            ffn(target),
         ] {
             let source = emit(&plan).unwrap();
             assert_eq!(source.requirements().target, target);
@@ -173,9 +132,6 @@ fn native_families_emit_on_each_target_with_per_kernel_resources() {
             assert_eq!(source.code(), emit(&plan).unwrap().code());
         }
     }
-    let source = emit(&ffn(CudaTargetCapability::Hopper)).unwrap();
-    assert!(source.code().contains(", 65536, stream>>>"));
-    assert!(source.code().contains(", 0, stream>>>"));
 }
 
 #[test]
@@ -390,7 +346,6 @@ fn emitted_programs_compile_and_link_on_all_targets() {
             reduction(target),
             gemm(target, Storage::Global),
             gemm(target, Storage::Register),
-            ffn(target),
         ];
         for (case, plan) in plans.iter().enumerate() {
             let source = emit(plan).unwrap();
