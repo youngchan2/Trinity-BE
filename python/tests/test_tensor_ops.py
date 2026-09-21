@@ -22,6 +22,10 @@ def test_primitive_plans_and_metadata(shape):
         dtypes = ["bf16", "fp32", "bf16"] if name in ("add", "mul", "div") else ["bf16", "fp32"]
         attrs = {"scalar": 4096.0} if name == "scalar_div" else {}
         for world in (1, 2):
+            if world == 2:
+                with pytest.raises(NotImplementedError, match="Persistent"):
+                    tl.emit(pointwise(name, shape, dtypes, world, **attrs))
+                continue
             source = tl.emit(pointwise(name, shape, dtypes, world, **attrs))
             buffers = source.requirements.buffers
             assert all(b.shape == shape for b in buffers)
@@ -48,7 +52,11 @@ def test_graph_example_lowers_gemm_bias_and_relu():
     plan = gemm_relu()
     metadata = json.loads(plan.metadata_json())
     assert {b["name"] for b in metadata["inputs"]} == {"X", "W", "bias"}
-    assert len(metadata["operations"]) == len(metadata["actions"]) == 3
+    assert len(metadata["operations"]) == len(metadata["statements"]) == 3
+    assert all("loop" in statement for statement in metadata["statements"])
+    assert [s["operations"] for s in metadata["statements"]] == [
+        [operation["id"]] for operation in metadata["operations"]
+    ]
     source = tl.emit(plan)
     assert sum(not b.external for b in source.requirements.buffers) == 2
     assert all(b.dtype == "bf16" for b in source.requirements.buffers)
@@ -71,15 +79,10 @@ def test_invalid_operands_and_arity_are_rejected():
     assert (
         tl.reduce_sum_implementations()[0].enumerate(["fp32"] * 2, [[16, 32], [32]], axis=0) == []
     )
-    instance = definition("sqrt").enumerate(["fp32"] * 2, [[16]] * 2)[0]
     b = tl.PhysicalPlanBuilder()
-    x = b.add_value("fp32", [16], "external")
     y = b.add_value("fp32", [16], "external")
-    with pytest.raises(ValueError):
-        b.add_operation([x, x], [y], instance)
-    wrong = b.add_value("bf16", [16], "external")
-    with pytest.raises(ValueError):
-        b.add_operation([x], [wrong], instance)
+    with pytest.raises(ValueError, match="unknown value"):
+        b.add_operation([999], [y], expression="(store invalid)")
 
 
 def test_fp32_metadata_rejects_wrong_bytes_stride_rank():
@@ -90,7 +93,7 @@ def test_fp32_metadata_rejects_wrong_bytes_stride_rank():
     for update in (
         {"bytes": 258},
         {"strides": [2]},
-        {"shape": [1, 1, 129], "strides": [129, 129, 1]},
+        {"shape": [1, 1, 1, 129], "strides": [129, 129, 129, 1]},
         {"dtype": "fp64"},
     ):
         corrupted = json.loads(json.dumps(data))

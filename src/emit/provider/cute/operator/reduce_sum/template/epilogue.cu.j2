@@ -1,0 +1,6 @@
+  {
+    if ({{ prefix }}_lane == 0) {
+      for (int group = 0; group < {{ row_groups }}; ++group) {
+        const int row = group * 4 + {{ prefix }}_warp;
+        if (row < {{ rows }} && ({{ valid_row }})) {
+          const float {{ prefix }}_result = {{ prefix }}_accumulator[group];

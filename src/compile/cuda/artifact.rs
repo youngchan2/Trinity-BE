@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use super::CompileDiagnostics;
 use crate::CudaSource;
-use crate::emit::cuda::CudaRequirements;
+use crate::compile::CudaRequirements;
 
 /// Unloaded compiled code and metadata. No CUDA runtime is loaded or prepared.
 /// Drop removes the private build directory; `persist` transfers file ownership

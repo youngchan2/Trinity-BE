@@ -40,7 +40,6 @@ def library(tmp_path_factory):
     ]
     data = dict(
         target="hopper",
-        cuda_arch="sm_90a",
         world_size=1,
         buffers=buffers,
         workspace_bytes=0,
@@ -49,7 +48,6 @@ def library(tmp_path_factory):
         cooperative_launch=False,
         shared_memory_bytes=0,
         block_threads=128,
-        minimum_workers=1,
         nvshmem=False,
         nvls=False,
     )
@@ -75,7 +73,7 @@ def build_library(temp, data):
             f"-arch=sm_{capability[0]}{capability[1]}",
             f"-DFIXTURE_COPY_BYTES={data['buffers'][0]['bytes']}",
             "-I",
-            str(root.parent / "src/emit/cuda"),
+            str(root.parent / "src/native"),
             "-I",
             str(temp),
             str(root / "tests/fixtures/cuda_library.cu"),
@@ -155,7 +153,7 @@ def collect_until(fn):
 
 def test_real_device_admission():
     if torch.cuda.get_device_capability(0) != (9, 0):
-        with pytest.raises(ValueError, match="Hopper"):
+        with pytest.raises(ValueError, match="hopper"):
             device_of("cuda:0")
     else:
         assert device_of("cuda:0") == torch.device("cuda:0")

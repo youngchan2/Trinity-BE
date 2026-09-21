@@ -1,0 +1,45 @@
+  using {{ prefix }}_Element = cutlass::bfloat16_t;
+
+  // A is K-major; B is N-major to preserve coalesced row-major global loads.
+  auto {{ prefix }}_layout_a = cute::tile_to_shape(
+      cute::composition(cute::Swizzle<2, 3, 3>{},
+          cute::Layout<cute::Shape<cute::_8, cute::_32>, cute::Stride<cute::_32, cute::_1>>{}),
+      cute::make_shape(cute::_128{}, cute::_32{}, cute::_2{}));
+  auto {{ prefix }}_layout_b = cute::tile_to_shape(
+      cute::composition(cute::Swizzle<3, 3, 3>{},
+          cute::Layout<cute::Shape<cute::_64, cute::_8>, cute::Stride<cute::_1, cute::_64>>{}),
+      cute::make_shape(cute::_128{}, cute::_32{}, cute::_2{}));
+
+  struct {{ prefix }}_Shared {
+    alignas(128) cute::ArrayEngine<{{ prefix }}_Element, cute::cosize_v<decltype({{ prefix }}_layout_a)>> a;
+    alignas(128) cute::ArrayEngine<{{ prefix }}_Element, cute::cosize_v<decltype({{ prefix }}_layout_b)>> b;
+  };
+  static_assert(sizeof({{ prefix }}_Shared) == 32768);
+
+  auto& {{ prefix }}_shared = *reinterpret_cast<{{ prefix }}_Shared*>({{ shared }});
+  auto {{ prefix }}_sa = cute::make_tensor(cute::make_smem_ptr({{ prefix }}_shared.a.begin()), {{ prefix }}_layout_a);
+  auto {{ prefix }}_sb = cute::make_tensor(cute::make_smem_ptr({{ prefix }}_shared.b.begin()), {{ prefix }}_layout_b);
+  auto {{ prefix }}_mma = cute::make_tiled_mma(
+      cute::SM80_16x8x16_F32BF16BF16F32_TN{},
+      cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>{},
+      cute::Tile<cute::_32, cute::_32, cute::_16>{});
+  auto {{ prefix }}_thread = {{ prefix }}_mma.get_slice(threadIdx.x);
+  auto {{ prefix }}_coordinates = {{ prefix }}_thread.partition_C(
+      cute::make_identity_tensor(cute::make_shape(cute::_128{}, cute::_128{})));
+  auto {{ prefix }}_accumulator = {{ prefix }}_thread.make_fragment_C({{ prefix }}_coordinates);
+  cute::clear({{ prefix }}_accumulator);
+
+  auto {{ prefix }}_ra = {{ prefix }}_thread.partition_fragment_A({{ prefix }}_sa(cute::_, cute::_, 0));
+  auto {{ prefix }}_rb = {{ prefix }}_thread.partition_fragment_B({{ prefix }}_sb(cute::_, cute::_, 0));
+  auto {{ prefix }}_copy_a = cute::make_tiled_copy_A(
+      cute::Copy_Atom<cute::SM75_U32x4_LDSM_N, {{ prefix }}_Element>{}, {{ prefix }}_mma);
+  auto {{ prefix }}_copy_b = cute::make_tiled_copy_B(
+      cute::Copy_Atom<cute::SM75_U16x8_LDSM_T, {{ prefix }}_Element>{}, {{ prefix }}_mma);
+  auto {{ prefix }}_copy_thread_a = {{ prefix }}_copy_a.get_slice(threadIdx.x);
+  auto {{ prefix }}_copy_thread_b = {{ prefix }}_copy_b.get_slice(threadIdx.x);
+  auto {{ prefix }}_source_a = {{ prefix }}_copy_thread_a.partition_S({{ prefix }}_sa);
+  auto {{ prefix }}_source_b = {{ prefix }}_copy_thread_b.partition_S({{ prefix }}_sb);
+  auto {{ prefix }}_register_a = {{ prefix }}_copy_thread_a.retile_D({{ prefix }}_ra);
+  auto {{ prefix }}_register_b = {{ prefix }}_copy_thread_b.retile_D({{ prefix }}_rb);
+  const int64_t {{ prefix }}_m = {{ m_origin }};
+  const int64_t {{ prefix }}_n = {{ n_origin }};

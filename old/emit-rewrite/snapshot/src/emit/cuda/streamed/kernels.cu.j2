@@ -1,0 +1,8 @@
+{% for kernel in kernels %}
+__global__ void kernel_{{ loop.index0 }}(Bindings bindings, std::int64_t block_base) {
+  extern __shared__ __align__(128) unsigned char storage[];
+  std::int64_t block=block_base+std::int64_t(blockIdx.x);
+{{ kernel.coordinates }}
+  operation_{{ kernel.body }}(bindings, coordinates, storage, StreamedRuntime{});
+}
+{% endfor %}

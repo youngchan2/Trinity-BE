@@ -1,67 +1,187 @@
+use super::execution::{DeviceStatement, Execution, Launch};
+use crate::emit::{
+    EmitError, combine::CombinedPlan, prepare::PreparedPlan, provider::KernelBindings,
+};
+use crate::{CudaSource, CudaTargetCapability};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::graph::Launch;
-use super::{BufferBindingRequirement, CudaRequirements, EmitError, Execution};
-
-/// Only operation inputs, resource requirements, and body text are shared.
-/// Each execution mode owns its CUDA types, runtime, kernels, and host ABI.
 #[derive(Serialize)]
-pub(super) struct CommonContext<'a> {
-    buffers: &'a [BufferBindingRequirement],
-    shared: usize,
-    launches: &'a [Launch],
-    bodies: &'a [String],
-    common_types: &'static str,
-    host_abi: &'static str,
-    requirements_literal: String,
-    execution_mode: usize,
+struct Axis {
+    start: i64,
+    step: i64,
+    count: u64,
+    divisor: u64,
 }
 
-impl<'a> CommonContext<'a> {
-    pub(super) fn new(
-        req: &'a CudaRequirements,
-        execution: &'a Execution,
-        bodies: &'a [String],
-    ) -> Self {
-        Self {
-            buffers: &req.buffers,
-            shared: req.shared_memory_bytes,
-            launches: &execution.launches,
-            bodies,
-            common_types: include_str!("types.cuh"),
-            host_abi: include_str!("abi.h"),
-            requirements_literal: serde_json::to_string(&serde_json::to_string(req).unwrap())
-                .unwrap(),
-            execution_mode: if req.world_size == 1 { 1 } else { 2 },
+#[derive(Serialize)]
+struct Kernel {
+    code: String,
+    axes: Vec<Axis>,
+    coordinates: usize,
+    threads: usize,
+    shared: usize,
+    alignment: usize,
+}
+
+#[derive(Serialize)]
+struct Context<'a> {
+    abi: &'static str,
+    metadata: String,
+    includes: BTreeSet<&'static str>,
+    kernels: Vec<Kernel>,
+    launches: &'a [Launch],
+    buffers: &'a [crate::compile::BufferBindingRequirement],
+    major: u32,
+    minor: u32,
+}
+
+fn failed(e: impl std::fmt::Display) -> EmitError {
+    EmitError::Render {
+        message: e.to_string(),
+    }
+}
+
+fn device(
+    nodes: &[DeviceStatement<'_>],
+    plan: &CombinedPlan<'_>,
+    bindings: &KernelBindings,
+    next: &mut usize,
+    includes: &mut BTreeSet<&'static str>,
+) -> Result<String, EmitError> {
+    let mut code = String::new();
+
+    for node in nodes {
+        let id = *next;
+        *next += 1;
+
+        match node {
+            DeviceStatement::Body(body) => {
+                let mut bindings = bindings.clone();
+                bindings.prefix = format!("{}_b{id}", bindings.prefix);
+
+                let rendered = plan.render_body(body, &bindings).map_err(failed)?;
+                includes.extend(rendered.includes);
+
+                code.push_str(&rendered.code);
+                // Also covers scratch reuse and memory handoff between bodies
+                // and between iterations of an enclosing ordinary serial loop.
+                code.push_str("\n__syncthreads();\n");
+            }
+            DeviceStatement::Sequential { domain, body } => {
+                let name = format!("serial_{id}");
+                let mut bindings = bindings.clone();
+
+                bindings.indices.insert(domain.name.clone(), name.clone());
+
+                let inner = device(body, plan, &bindings, next, includes)?;
+                code.push_str(&format!(
+                    "for (int64_t {name} = {}LL; {name} < {}LL; {name} += {}LL) {{\n{inner}\n}}\n",
+                    domain.start, domain.stop, domain.step
+                ));
+            }
         }
     }
+    Ok(code)
 }
 
-pub(super) fn program(
-    req: &CudaRequirements,
-    execution: &Execution,
-    bodies: &[String],
-) -> Result<String, EmitError> {
-    if req.world_size == 1 {
-        super::streamed::program(req, execution, bodies)
-    } else {
-        super::persistent::program(req, execution, bodies)
+pub(super) fn render(
+    prepared: &PreparedPlan<'_>,
+    plan: &CombinedPlan<'_>,
+    execution: &Execution<'_>,
+) -> Result<CudaSource, EmitError> {
+    let mut includes = BTreeSet::new();
+    let mut kernels = Vec::new();
+    let values = prepared
+        .plan
+        .value_instances()
+        .filter_map(|(id, value)| {
+            prepared.bindings.slot(id).map(|slot| {
+                let dtype = match value.dtype() {
+                    crate::DType::Bf16 => "cutlass::bfloat16_t",
+                    crate::DType::Fp32 => "float",
+                };
+
+                (
+                    id,
+                    format!("static_cast<{dtype}*>(bindings.values[{slot}])"),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for (id, k) in execution.kernels.iter().enumerate() {
+        let bindings = KernelBindings {
+            block_threads: k.threads,
+            values: values.clone(),
+            registers: BTreeMap::new(),
+            indices: k
+                .domain
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (d.name.clone(), format!("coordinates[{i}]")))
+                .collect(),
+            shared_memory: Some("scratch".into()),
+            prefix: format!("kernel{id}"),
+        };
+
+        let code = device(&k.body, plan, &bindings, &mut 0, &mut includes)?;
+        let axes = k
+            .domain
+            .iter()
+            .enumerate()
+            .map(|(i, d)| Axis {
+                start: d.start,
+                step: d.step,
+                count: d.count,
+                divisor: k.domain[i + 1..].iter().map(|d| d.count).product(),
+            })
+            .collect();
+
+        kernels.push(Kernel {
+            code,
+            axes,
+            coordinates: k.domain.len().max(1),
+            threads: k.threads,
+            shared: k.shared,
+            alignment: k.alignment.max(16),
+        });
     }
-}
 
-pub(super) fn render<T: Serialize>(
-    templates: &[(&str, &str)],
-    context: &T,
-) -> Result<String, EmitError> {
-    let mut environment = minijinja::Environment::new();
+    let (major, minor) = match execution.requirements.target {
+        CudaTargetCapability::Hopper => (9, 0),
+        CudaTargetCapability::Sm89 => (8, 9),
+        CudaTargetCapability::Sm120 => (12, 0),
+    };
 
-    environment.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-    environment.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
-    environment.add_template("headers", include_str!("templates/headers.cu.j2"))?;
+    let metadata = serde_json::to_string(&execution.requirements).map_err(failed)?;
+    let context = Context {
+        abi: include_str!("../../native/abi.h"),
+        metadata: serde_json::to_string(&metadata).map_err(failed)?,
+        includes,
+        kernels,
+        launches: &execution.launches,
+        buffers: &execution.requirements.buffers,
+        major,
+        minor,
+    };
 
-    for &(name, source) in templates {
-        environment.add_template(name, source)?;
-    }
+    let mut env = minijinja::Environment::new();
 
-    Ok(environment.get_template("program")?.render(context)?)
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+    env.add_template("program", include_str!("templates/program.cu.j2"))
+        .map_err(failed)?;
+    env.add_template("host", include_str!("templates/host.cu.j2"))
+        .map_err(failed)?;
+
+    let code = env
+        .get_template("program")
+        .map_err(failed)?
+        .render(context)
+        .map_err(failed)?;
+
+    Ok(CudaSource {
+        code,
+        requirements: execution.requirements.clone(),
+    })
 }

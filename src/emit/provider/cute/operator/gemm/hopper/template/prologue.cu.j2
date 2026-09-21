@@ -1,0 +1,28 @@
+  using {{ prefix }}_Element = cutlass::bfloat16_t;
+
+  auto {{ prefix }}_layout_a = cute::tile_to_shape(
+      cute::GMMA::Layout_K_SW128_Atom<{{ prefix }}_Element>{},
+      cute::make_shape(cute::Int<128>{}, cute::Int<64>{}, cute::Int<2>{}));
+  auto {{ prefix }}_layout_b = cute::tile_to_shape(
+      cute::GMMA::Layout_MN_SW128_Atom<{{ prefix }}_Element>{},
+      cute::make_shape(cute::Int<128>{}, cute::Int<64>{}, cute::Int<2>{}));
+
+  struct {{ prefix }}_Shared {
+    alignas(128) cute::ArrayEngine<{{ prefix }}_Element, cute::cosize_v<decltype({{ prefix }}_layout_a)>> a;
+    alignas(128) cute::ArrayEngine<{{ prefix }}_Element, cute::cosize_v<decltype({{ prefix }}_layout_b)>> b;
+  };
+
+  static_assert(sizeof({{ prefix }}_Shared) == 65536);
+
+  auto& {{ prefix }}_shared = *reinterpret_cast<{{ prefix }}_Shared*>({{ shared }});
+  auto {{ prefix }}_sa = cute::make_tensor(cute::make_smem_ptr({{ prefix }}_shared.a.begin()), {{ prefix }}_layout_a);
+  auto {{ prefix }}_sb = cute::make_tensor(cute::make_smem_ptr({{ prefix }}_shared.b.begin()), {{ prefix }}_layout_b);
+  auto {{ prefix }}_mma = cute::make_tiled_mma(
+      cute::SM90_64x64x16_F32BF16BF16_SS<cute::GMMA::Major::K, cute::GMMA::Major::MN>{});
+  auto {{ prefix }}_thread = {{ prefix }}_mma.get_slice(threadIdx.x);
+  auto {{ prefix }}_coordinates = {{ prefix }}_thread.partition_C(
+      cute::make_identity_tensor(cute::make_shape(cute::Int<128>{}, cute::Int<128>{})));
+  auto {{ prefix }}_accumulator = {{ prefix }}_thread.make_fragment_C({{ prefix }}_coordinates);
+  cute::clear({{ prefix }}_accumulator);
+  const int64_t {{ prefix }}_m = {{ m_origin }};
+  const int64_t {{ prefix }}_n = {{ n_origin }};

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 344" role="img" aria-labelledby="trinity-lowering-physical-plan-title trinity-lowering-physical-plan-desc">
+<title id="trinity-lowering-physical-plan-title">PhysicalPlan 구성</title>
+<desc id="trinity-lowering-physical-plan-desc">텍스트 IR과 프로그램 직접 구성이 PhysicalPlanBuilder로 합류하고, 등록 검사와 이름·operand 정규화, 구조 검증, ID 정규화를 거쳐 PhysicalPlan을 만든다.</desc>
+<defs>
+<style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');</style>
+<marker id="trinity-lowering-physical-plan-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker>
+<marker id="trinity-lowering-physical-plan-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#eb6c36"/></marker>
+<marker id="trinity-lowering-physical-plan-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"/></marker>
+<style>
+.name{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:12px;font-weight:600;fill:#2d3142}
+.sub{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:9px;fill:#4f5d75}
+.note{font-family:'Geist','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:12px;font-weight:400;fill:#4f5d75}
+</style></defs>
+<rect width="1520" height="344" fill="#f5f5f5"/>
+<rect x="484" y="88" width="792" height="144" fill="#2d3142" fill-opacity="0.02" stroke="#bfc0c0" stroke-width="0.8"/>
+<text class="name" x="500" y="108">PhysicalPlanBuilder::build()</text>
+<path d="M 220 88 H 232 Q 240 88 240 96 V 140 Q 240 148 248 148 H 260" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 220 232 H 224 Q 232 232 232 224 V 180 Q 232 172 240 172 H 260" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 460 160 H 500" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 660 160 H 700" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 860 160 H 900" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 1060 160 H 1100" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<path d="M 1260 160 H 1300" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#trinity-lowering-physical-plan-arrow)"/>
+<g data-node="ir"><rect x="40" y="56" width="180" height="64" fill="#ececec" stroke="#7a8399"/><text class="name" x="130" y="83" text-anchor="middle">lower_ir()</text><text class="note" x="130" y="101" text-anchor="middle">텍스트 IR</text></g>
+<g data-node="direct"><rect x="40" y="200" width="180" height="64" fill="#ececec" stroke="#7a8399"/><text class="name" x="130" y="227" text-anchor="middle">add_*() · bind_input()</text><text class="note" x="130" y="245" text-anchor="middle">프로그램 직접 구성</text></g>
+<g data-node="builder"><rect x="260" y="128" width="200" height="64" fill="#ffffff" stroke="#2d3142"/><text class="name" x="360" y="164" text-anchor="middle">PhysicalPlanBuilder</text></g>
+<g data-node="registration"><rect x="500" y="128" width="160" height="64" fill="#ffffff" stroke="#2d3142"/><text class="name" x="580" y="164" text-anchor="middle">build()</text></g>
+<g data-node="normalize"><rect x="700" y="128" width="160" height="64" fill="#ffffff" stroke="#2d3142"/><text class="name" x="780" y="164" text-anchor="middle">normalize()</text></g>
+<g data-node="validate"><rect x="900" y="128" width="160" height="64" fill="#ffffff" stroke="#2d3142"/><text class="name" x="980" y="164" text-anchor="middle">validate_program()</text></g>
+<g data-node="canonical"><rect x="1100" y="128" width="160" height="64" fill="#ffffff" stroke="#2d3142"/><text class="name" x="1180" y="155" text-anchor="middle">canonicalize()</text><text class="note" x="1180" y="173" text-anchor="middle">ID 정규화</text></g>
+<g data-node="plan"><rect x="1300" y="128" width="180" height="64" fill="#f8eae2" stroke="#eb6c36"/><text class="name" x="1390" y="164" text-anchor="middle">PhysicalPlan</text></g>
+<line x1="40" y1="284" x2="1480" y2="284" stroke="#bfc0c0" stroke-width="0.8"/>
+<rect x="40" y="300" width="12" height="12" fill="#ececec" stroke="#7a8399"/><text class="note" x="64" y="311">입력</text>
+<rect x="200" y="300" width="12" height="12" fill="#f8eae2" stroke="#eb6c36"/><text class="note" x="224" y="311">출력</text>
+</svg>

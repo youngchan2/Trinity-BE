@@ -1,0 +1,166 @@
+{
+  "captured_at_utc": "2026-09-16T10:00:11.677807+00:00",
+  "content_basis": "working tree before explicit-plan refactor; paths relative to repository root",
+  "files": [
+    {
+      "path": "crates/trinity/src/lowering/error.rs",
+      "bytes": 288,
+      "sha256": "4d8e80906b2d3f8f40941df76455fd92fc4d3f4f5db753680fc453ebdd141108"
+    },
+    {
+      "path": "crates/trinity/src/lowering/mod.rs",
+      "bytes": 15823,
+      "sha256": "ca60bfd52e76623ce83228cb69193cad5d29711a0fe5489ec2501f05713f363e"
+    },
+    {
+      "path": "crates/trinity/src/lowering/tests.rs",
+      "bytes": 14104,
+      "sha256": "2e61e9f434f040be540da79dafaa90f121a9a351aa23210abdbbe0b375dff786"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/mod.rs",
+      "bytes": 5511,
+      "sha256": "c1e876487e75b82fccfee9c1f0a4f369a78d95bd40fa751bcad5027a27a9c460"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedule.rs",
+      "bytes": 547,
+      "sha256": "a3b02bf3d114b7b52dd38922725a53634e447d183caec123eaf0acdb670e9ce2"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/broadcast.rs",
+      "bytes": 3106,
+      "sha256": "1cc83a948bcb30925c4cdedfaa2b322b89ffdcb7ec45a7ddcdb8871c85de50e3"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/expression.rs",
+      "bytes": 763,
+      "sha256": "0d3bd9d70f4201ac040cd4e3c2fd174658d5d3dbe35712d08e37847085bf3e24"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/gemm.rs",
+      "bytes": 4489,
+      "sha256": "45b904a8904c36700f24d62d7787648391f46928d6a9070240bb9b14e3a80125"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/mod.rs",
+      "bytes": 1621,
+      "sha256": "e831d267daad7dca38dfe8b8807e90367cabf1068112b32f85bc37b205fce1a7"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/nvls.rs",
+      "bytes": 5582,
+      "sha256": "aa5860a15ba4d0357fe44ed474021b82ff14dd04a1712537a7e9b6c4fdda7a3b"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/peer.rs",
+      "bytes": 5732,
+      "sha256": "5737e8f721d61b0b97b2c80f33a903ef43b13103bddf8b6ee3eba40c82402bf0"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/pointwise.rs",
+      "bytes": 6849,
+      "sha256": "d7310e68bda5c7318f0ed091a9c70116b6ffb36ecaa5954e61ae17e59b6eb1a3"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/schedules/reduce_sum.rs",
+      "bytes": 2977,
+      "sha256": "617bff3da461ad9e086c492d936277dfcca64d444662b7965a19190cceebcbb9"
+    },
+    {
+      "path": "crates/trinity-lowering/src/implementation/tensor.rs",
+      "bytes": 2178,
+      "sha256": "03880c3678ae3248f73f6fb0ab0444c90183bba870f37ba16a1a692f13fe397f"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/address.rs",
+      "bytes": 5502,
+      "sha256": "2771f3f7910e5cd4b8776859ee754f9510ee3357e9a0a81e5afbb61414ec51e7"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/builder.rs",
+      "bytes": 3734,
+      "sha256": "7b11fe6a86083459f5b84db37a5efd761e723c5691e1d10f476c059482691763"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/canonical.rs",
+      "bytes": 4068,
+      "sha256": "a3d9f74bb10c5e9cfe3401d26ac769cd9cf63378eee2611f4614599fbd323877"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/error.rs",
+      "bytes": 2282,
+      "sha256": "9df38c8fbb5e759668579ccd21dcb35620254d22e705a21f40cbc25fc6dfb739"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/finalize.rs",
+      "bytes": 8812,
+      "sha256": "1df9a39ce78cffa99ad8d617c19bad3d08ee89656997a843bb19fdf10a1f4705"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/loops.rs",
+      "bytes": 7569,
+      "sha256": "4c22b4c4bde89176fcf1df65ee609d57999b5de750fd097df67e411432fc7f88"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/mod.rs",
+      "bytes": 578,
+      "sha256": "09477af500aac5a472be74cb5a1660b730d7dbe0411de5718a497945e6163867"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/normalize.rs",
+      "bytes": 12249,
+      "sha256": "794c458ebaa30b6852c61bbb7a420fbea7ed0b761b8263ee5e0c5cbd3e4a35ba"
+    },
+    {
+      "path": "crates/trinity-lowering/src/plan/types.rs",
+      "bytes": 9118,
+      "sha256": "c79d5bd698ad2cdd5c575ab7f0991019f6b60f24bcefcd06fa79065b71c49d76"
+    },
+    {
+      "path": "crates/trinity-lowering/src/tests.rs",
+      "bytes": 11112,
+      "sha256": "ce06cc43a35c1828272670bc295ac0e8aa5c265b6275203a054a058702a204c8"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/emit.rs",
+      "bytes": 1151,
+      "sha256": "db24421d64a401a6279114fd42a8dd315149fa8a192efd447c412e1a73c1a8ac"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/loop_ir.rs",
+      "bytes": 3957,
+      "sha256": "783cb1688dad9d59de9e41888671675cd3189dacb9d1001006df631a246f6a90"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/physical_plan.rs",
+      "bytes": 3408,
+      "sha256": "20c627d0b712bd0c47578bc60164c1d8abdb625b72022409fb97ca7b6f1e3bab"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/support/loop_ir.rs",
+      "bytes": 2447,
+      "sha256": "d7bc144dfc7771e72b0c96fc3f8fafcdf0034aed77c4ad6599ef4d61726ea4b0"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/support/mod.rs",
+      "bytes": 5616,
+      "sha256": "9d9ba012ee6e02ed71ae306df6792b3bdd11fe4a35dba8d1e51d1f7be4e1bda0"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/support/tensor.rs",
+      "bytes": 5875,
+      "sha256": "99381e821737b517cd301d74c95f730cd72a43859da39f7e65923ac6fb9cac54"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/tensor_ops.rs",
+      "bytes": 6383,
+      "sha256": "7e5a9e2a3ff740fff519f787f668c903bf8827e4badd38e5210f0d52ac0e3d07"
+    },
+    {
+      "path": "crates/trinity-lowering/tests/unified_lowering.rs",
+      "bytes": 3572,
+      "sha256": "778a8ed4d0104e4258744d1753b39bf1239622f5449a378f7820de645924823b"
+    }
+  ]
+}

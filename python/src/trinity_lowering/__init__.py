@@ -15,6 +15,7 @@ from .compiler import (
     compile,
     emit,
     gemm_implementations,
+    lower_ir,
 )
 from .errors import DistributedFailure, ResourceBusy, RuntimeFailure
 from .graph import Graph
@@ -36,6 +37,7 @@ __all__ = [
     "compile",
     "emit",
     "gemm_implementations",
+    "lower_ir",
     "DistributedFailure",
     "ResourceBusy",
     "RuntimeFailure",

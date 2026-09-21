@@ -37,10 +37,12 @@ def pytest_collection_modifyitems(items):
     import torch
 
     for item in items:
-        if "gpu" in item.keywords and (
-            not torch.cuda.is_available() or torch.cuda.get_device_capability() != (9, 0)
-        ):
-            item.add_marker(pytest.mark.skip(reason="requires an accessible Hopper GPU"))
+        if "gpu" in item.keywords:
+            from trinity_lowering.metadata import TARGET_CAPABILITIES
+            target = getattr(item, "callspec", None)
+            target = target.params.get("target", "hopper") if target else "hopper"
+            if not torch.cuda.is_available() or torch.cuda.get_device_capability() != TARGET_CAPABILITIES[target]:
+                item.add_marker(pytest.mark.skip(reason=f"requires an accessible {target} GPU"))
         if "cuda_runtime" in item.keywords and not torch.cuda.is_available():
             item.add_marker(pytest.mark.skip(reason="requires an accessible CUDA GPU"))
         if "distributed" in item.keywords and os.environ.get("TRINITY_DISTRIBUTED_TESTS") != "1":

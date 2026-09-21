@@ -1,0 +1,230 @@
+namespace trinity::generated {
+static int prepared_device = -1;
+static CUcontext prepared_context = nullptr;
+static CUmodule registered_module = nullptr;
+static bool preparation_complete = false;
+static unsigned prepared_maximum_workers = 0;
+
+static int check_prepared_context(abi::ErrorInfo* error, abi::Stage stage) {
+  bool submitted = false;
+  if (prepared_device < 0) return abi::report(error, abi::generated, kNotPrepared, stage, submitted);
+
+  int device = 0;
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  CUcontext context = nullptr;
+  auto driver_status = cuCtxGetCurrent(&context);
+  if (driver_status != CUDA_SUCCESS) return abi::report(error, abi::driver, static_cast<int>(driver_status), stage, submitted);
+
+  return abi::report(error, abi::generated, device == prepared_device && context == prepared_context ? 0 : kWrongDevice, stage);
+}
+
+static int check_prepared(abi::ErrorInfo* error, abi::Stage stage) {
+  bool submitted = false;
+  if (!preparation_complete) return abi::report(error, abi::generated, kNotPrepared, stage, submitted);
+
+  return check_prepared_context(error, stage);
+}
+} // namespace trinity::generated
+
+extern "C" int trinity_release(trinity::abi::ErrorInfo* error);
+
+// Call before stream capture. Registers this module with an already initialized
+// NVSHMEM world. No tensor or control-workspace allocation is performed here.
+extern "C" int trinity_prepare(unsigned* maximum_workers, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  abi::Stage stage = abi::prepare;
+  bool submitted = false;
+
+  if (maximum_workers == nullptr) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  int device = 0;
+
+  auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  if (registered_module != nullptr) {
+    int check = check_prepared_context(error, stage);
+    if (check != 0) return check;
+    if (!preparation_complete) return abi::report(error, abi::generated, kReleaseRequired, stage, submitted);
+    *maximum_workers = prepared_maximum_workers;
+    return abi::report(error, abi::none, 0, stage, submitted);
+  }
+
+  if (nvshmemx_init_status() < NVSHMEM_STATUS_IS_INITIALIZED) return abi::report(error, abi::generated, kNvshmemNotInitialized, stage, submitted);
+
+  cudaDeviceProp properties{};
+  status = cudaGetDeviceProperties(&properties, device);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+  if (properties.major != 9 || properties.minor != 0) return abi::report(error, abi::generated, kUnsupportedDevice, stage, submitted);
+
+  // Admission uses the resident grid size. NVSHMEM can otherwise fall back
+  // to an ordinary launch, which does not provide that residency guarantee.
+  if (!properties.cooperativeLaunch) return abi::report(error, abi::generated, kUnsupportedDevice, stage, submitted);
+  if (nvshmem_n_pes() != kWorld) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  status = cudaFuncSetAttribute(persistent_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  int blocks = 0;
+
+  status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, persistent_kernel, kThreads, kSharedBytes);
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  int collective_limit = 0;
+  int result = nvshmemx_collective_launch_query_gridsize(reinterpret_cast<void const*>(persistent_kernel), dim3(kThreads), nullptr, kSharedBytes, &collective_limit);
+  if (result != 0) return abi::report(error, abi::transport, result, stage, submitted);
+
+  *maximum_workers = static_cast<unsigned>(std::min(blocks * properties.multiProcessorCount, collective_limit));
+  if (*maximum_workers == 0) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  cudaFunction_t function = nullptr;
+  status = cudaGetFuncBySymbol(&function, reinterpret_cast<void const*>(persistent_kernel));
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  CUmodule module = nullptr;
+  auto driver_status = cuFuncGetModule(&module, reinterpret_cast<CUfunction>(function));
+  if (driver_status != CUDA_SUCCESS) return abi::report(error, abi::driver, static_cast<int>(driver_status), stage, submitted);
+
+  CUcontext context = nullptr;
+  driver_status = cuCtxGetCurrent(&context);
+  if (driver_status != CUDA_SUCCESS) return abi::report(error, abi::driver, static_cast<int>(driver_status), stage, submitted);
+
+  // Keep the handle even on failure: initialization may have registered state
+  // before failing. Failed rollback must never allow this module to unload.
+  registered_module = module;
+  prepared_device = device;
+  prepared_context = context;
+  stage = abi::registration;
+  result = nvshmemx_cumodule_init(module);
+  if (result != 0) {
+    abi::ErrorInfo cleanup{};
+    trinity_release(&cleanup);
+    abi::report(error, abi::transport, result, stage);
+    if (error) { error->cleanup_domain = cleanup.domain; error->cleanup_code = cleanup.code; }
+    return result;
+  }
+
+  preparation_complete = true;
+  prepared_maximum_workers = *maximum_workers;
+
+  return abi::report(error, abi::none, 0, stage, submitted);
+}
+
+extern "C" int trinity_launch(trinity::generated::LaunchParams const* p, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  abi::Stage stage = abi::validate;
+  bool submitted = false;
+
+  int prepared = check_prepared(error, stage);
+  if (prepared != 0) return prepared;
+
+  if (p == nullptr || p->bindings == nullptr || p->binding_count != kBuffers || p->workspace == nullptr
+      || p->workspace_bytes < kWorkspaceBytes || reinterpret_cast<std::uintptr_t>(p->workspace) % kWorkspaceAlignment != 0
+      || p->worker_count == 0) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  Context c{};
+
+  c.workspace = static_cast<unsigned char*>(p->workspace);
+  c.workers = p->worker_count;
+  c.delay_rank = p->delay_rank; c.delay_task = p->delay_task; c.delay_cycles = p->delay_cycles;
+
+{% for buffer in buffers %}
+  if (p->bindings[{{ buffer.value }}] == nullptr || reinterpret_cast<std::uintptr_t>(p->bindings[{{ buffer.value }}]) % {{ buffer.alignment }} != 0) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+  c.bindings.values[{{ buffer.value }}] = p->bindings[{{ buffer.value }}];
+{% endfor %}
+
+  auto stream = reinterpret_cast<cudaStream_t>(p->stream);
+
+  c.rank = nvshmem_my_pe();
+  if (c.workers > prepared_maximum_workers) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  for (unsigned peer = 0; peer < kWorld; ++peer) {
+    if (nvshmem_ptr(p->workspace, peer) == nullptr) return abi::report(error, abi::generated, kPeerUnavailable, stage, submitted);
+{% for buffer in buffers %}{% if buffer.symmetric %}
+    if (nvshmem_ptr(p->bindings[{{ buffer.value }}], peer) == nullptr) return abi::report(error, abi::generated, kPeerUnavailable, stage, submitted);
+{% endif %}{% endfor %}
+  }
+{% if nvls %}
+{% for buffer in buffers %}{% if buffer.symmetric %}
+  if (nvshmemx_mc_ptr(NVSHMEM_TEAM_WORLD, p->bindings[{{ buffer.value }}]) == nullptr) return abi::report(error, abi::generated, kPeerUnavailable, stage, submitted);
+{% endif %}{% endfor %}{% endif %}
+
+  stage = abi::initialization; submitted = true;
+  initialize<<<1, kThreads, 0, stream>>>(c);
+  auto status = cudaGetLastError();
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  // Initialization completes on every PE before any worker can observe signals.
+  nvshmemx_barrier_all_on_stream(stream);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, true);
+
+  stage = abi::launch;
+  void* arguments[] = { &c };
+  int result = nvshmemx_collective_launch(reinterpret_cast<void const*>(persistent_kernel), dim3(c.workers), dim3(kThreads), arguments, kSharedBytes, stream);
+  if (result != 0) return abi::report(error, abi::transport, result, stage, submitted);
+
+  // Protect remotely read source lifetimes and buffer reuse by the caller.
+  nvshmemx_barrier_all_on_stream(stream);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, true);
+
+  return abi::report(error, abi::none, 0, stage, submitted);
+}
+
+// Wait for this invocation and report asynchronous dispatcher/backend errors.
+// Call after launching, outside stream capture. No allocation is performed.
+extern "C" int trinity_status(void const* workspace, void* stream, trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  abi::Stage stage = abi::completion;
+  bool submitted = false;
+
+  int prepared = check_prepared(error, stage);
+  if (prepared != 0) return prepared;
+  if (workspace == nullptr) return abi::report(error, abi::generated, kInvalidLaunch, stage, submitted);
+
+  auto status = cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  Header result{};
+  status = cudaMemcpyAsync(&result, workspace, sizeof(result), cudaMemcpyDeviceToHost, reinterpret_cast<cudaStream_t>(stream));
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, true);
+  status = cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
+  if (status != cudaSuccess) return abi::report(error, abi::runtime, status, stage, submitted);
+
+  if (result.error != 0) return abi::report(error, abi::generated, result.error, stage, true);
+  return abi::report(error, abi::generated, result.complete == kTasksPerRank && result.active == 0 ? 0 : kInvalidLaunch, stage, true);
+}
+
+// Before global NVSHMEM finalization, after all work and Graphs have ended.
+// This is local module unregistration, not a world finalize or rank barrier.
+extern "C" int trinity_release(trinity::abi::ErrorInfo* error) {
+  using namespace trinity;
+  using namespace generated;
+
+  abi::Stage stage = abi::release;
+  bool submitted = false;
+
+  if (registered_module == nullptr) return abi::report(error, abi::none, 0, stage, submitted);
+  int check = check_prepared_context(error, stage);
+  if (check != 0) return check;
+
+  int result = nvshmemx_cumodule_finalize(registered_module);
+  if (result != 0) return abi::report(error, abi::transport, result, stage, submitted);
+
+  registered_module = nullptr;
+  prepared_context = nullptr;
+  prepared_device = -1;
+  preparation_complete = false;
+  prepared_maximum_workers = 0;
+
+  return abi::report(error, abi::none, 0, stage, submitted);
+}

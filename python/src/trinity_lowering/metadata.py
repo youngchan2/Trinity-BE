@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass
 from types import MappingProxyType
 
+TARGET_CAPABILITIES = {"hopper": (9, 0), "sm89": (8, 9), "sm120": (12, 0)}
+
 
 def freeze(value):
     if isinstance(value, dict):
@@ -32,7 +34,6 @@ class BufferRequirement:
 @dataclass(frozen=True)
 class Requirements:
     target: str
-    cuda_arch: str
     world_size: int
     buffers: tuple[BufferRequirement, ...]
     workspace_bytes: int
@@ -41,7 +42,6 @@ class Requirements:
     cooperative_launch: bool
     shared_memory_bytes: int
     block_threads: int
-    minimum_workers: int
     nvshmem: bool
     nvls: bool
 
@@ -52,7 +52,7 @@ def _positive(value, name):
 
 
 def requirements(data):
-    if data["target"] != "hopper" or data["cuda_arch"] != "sm_90a":
+    if data["target"] not in TARGET_CAPABILITIES:
         raise ValueError("unsupported artifact target")
 
     _positive(data["world_size"], "world_size")
@@ -70,12 +70,12 @@ def requirements(data):
             }
         )
 
-        if b.value != index or b.dtype not in ("bf16", "fp32") or len(b.shape) not in (1, 2):
+        if b.value != index or b.dtype not in ("bf16", "fp32") or len(b.shape) not in (1, 2, 3):
             raise ValueError("invalid canonical binding/dtype/shape")
         for extent in b.shape:
             _positive(extent, "shape extent")
         _positive(b.alignment, "alignment")
-        strides = (1,) if len(b.shape) == 1 else (b.shape[1], 1)
+        strides = tuple(math.prod(b.shape[i + 1 :]) for i in range(len(b.shape)))
         width = 2 if b.dtype == "bf16" else 4
         if b.alignment < width or b.alignment & (b.alignment - 1) or b.strides != strides:
             raise ValueError("invalid alignment/strides")
@@ -101,10 +101,11 @@ def requirements(data):
         raise ValueError("exactly one output binding required")
 
     persistent = data["world_size"] > 1
+    if persistent and data["target"] != "hopper":
+        raise ValueError("persistent artifacts require Hopper")
     if data["nvshmem"] != persistent or data["workspace_symmetric"] != persistent:
         raise ValueError("inconsistent world/workspace mode")
     _positive(data["workspace_alignment"], "workspace alignment")
-    _positive(data["minimum_workers"], "minimum workers")
     if persistent:
         _positive(data["workspace_bytes"], "workspace bytes")
         if not data["cooperative_launch"]:

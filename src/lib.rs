@@ -10,16 +10,17 @@ mod dtype;
 pub mod emit;
 mod fusion;
 mod implementation;
-mod physical;
+mod plan;
 pub mod platform;
 mod python;
 
 pub use compile::{
-    CompileConfig, CompileDiagnostics, CompileError, CudaArtifact, compile, compile_with_config,
+    CompileConfig, CompileDiagnostics, CompileError, CudaArtifact, CudaSource, compile,
+    compile_with_config,
 };
 pub use config::LoweringConfig;
 pub use dtype::DType;
-pub use emit::{CudaSource, EmitError, emit};
+pub use emit::{EmitError, emit};
 pub use fusion::{FusionError, FusionRewrite, FusionRule, fuse};
 pub use implementation::{
     AllGatherImplementation, AttributeSet, BroadcastImplementation, GemmImplementation,
@@ -27,12 +28,12 @@ pub use implementation::{
     ReduceSumImplementation, all_gather_implementations, broadcast_implementations, fusion_rules,
     gemm_implementations, pointwise_implementations, reduce_sum_implementations,
 };
-pub use physical::{
-    Action, ActionId, CommunicationKind, CommunicationOperation, ComputeOperation, Operation,
-    OperationId, OperationPayload, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder,
-    Storage, TensorBinding, ValueInstance, ValueInstanceId,
+pub use plan::{
+    AccessIndex, Constant, Expression, IndexExpr, IrConfig, IrError, Loop, LoopDomain, LoopKind,
+    Operation, OperationId, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder, Statement,
+    Storage, TensorAccess, TensorBinding, ValueInstance, ValueInstanceId, lower_ir,
 };
-pub use platform::{CudaTargetCapability, TargetCapability};
+pub use platform::{AsStr, CudaTargetCapability, TargetCapability};
 
 #[cfg(test)]
 mod tests;

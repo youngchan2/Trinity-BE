@@ -1,0 +1,5 @@
+  const int {{ prefix }}_warp = threadIdx.x / 32;
+  const int {{ prefix }}_lane = threadIdx.x % 32;
+  const int64_t {{ prefix }}_row_origin = {{ row_origin }};
+  // Each warp owns a disjoint set of rows; lane zero retains the running sums.
+  float {{ prefix }}_accumulator[{{ row_groups }}] = {};

@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-16T08:06:43.334056+00:00",
+  "source": "crates/trinity-lowering",
+  "content_basis": "working-tree files, not HEAD or index blobs",
+  "source_head": "19ba7babe01f4ac1b3a955d4e87591064f7c069b",
+  "parent_head": "71d34f9fc9bcee5ff4c69f4699d53603b1bd6fe2",
+  "selection": [
+    "src/emit",
+    "src/implementation",
+    "src/fusion",
+    "src/plan/rewrite.rs",
+    "src/plan/loops.rs",
+    "src/tests.rs",
+    "tests"
+  ],
+  "files": [
+    {
+      "path": "src/emit/bindings.rs",
+      "bytes": 4494,
+      "sha256": "1bae9ccb0ee8eae2c5c643eee88cc01e99abbd19073e92e15fd63d45b5382d20"
+    },
+    {
+      "path": "src/emit/cuda/abi.h",
+      "bytes": 3198,
+      "sha256": "0cda1ff563d09164e0afc7a60fdd38b2997b3f0b700bcf9aa8e7f375efcba5d7"
+    },
+    {
+      "path": "src/emit/cuda/access.rs",
+      "bytes": 15872,
+      "sha256": "8f033ea95bfc2a9b283bade68b86e8202de4518f0beaeba266b2885453fa9aa6"
+    },
+    {
+      "path": "src/emit/cuda/address.rs",
+      "bytes": 5427,
+      "sha256": "ccf1b037dcb080c4f79ecbc92f0d01039568570a22c43df3e88cc9b4462e5a90"
+    },
+    {
+      "path": "src/emit/cuda/backend.rs",
+      "bytes": 6512,
+      "sha256": "e130e90402fea3f68ca21b2746bd42c344231189f7374aa89e975033bc484567"
+    },
+    {
+      "path": "src/emit/cuda/body/builder.rs",
+      "bytes": 40332,
+      "sha256": "0c61b46d89f5542fd74cf18d8075cd35ee02681884fd2a6f4f47cf579c672afd"
+    },
+    {
+      "path": "src/emit/cuda/body/code.rs",
+      "bytes": 5067,
+      "sha256": "b410479f3212054697733b8b14bf74ebd4c73215f7776e9a7d754cc704558c8e"
+    },
+    {
+      "path": "src/emit/cuda/body/mod.rs",
+      "bytes": 11867,
+      "sha256": "ea869b6bbeea5a7f4e4e3486539525b754adbb6c6a8fb80302e3353f8cfe7a51"
+    },
+    {
+      "path": "src/emit/cuda/body/program.rs",
+      "bytes": 2043,
+      "sha256": "c76ce75ae382c5ce4fe53391e909bc438d4ca9bc21899febc2ffa03c04d0469f"
+    },
+    {
+      "path": "src/emit/cuda/domain.rs",
+      "bytes": 4944,
+      "sha256": "316426305bdddf5fb15153e685b4282ead3ae382e99c3c402749fccc26707da3"
+    },
+    {
+      "path": "src/emit/cuda/execution.rs",
+      "bytes": 2404,
+      "sha256": "3fefa5aa7361d06c2adbd9ea01d85d0ed93c17370164a7104c5c19546388f0ef"
+    },
+    {
+      "path": "src/emit/cuda/indexing.rs",
+      "bytes": 2578,
+      "sha256": "28ce4784eb46172bcf56498556e8ee4b5d0160749ca8ab4ea364c29b93c40ad4"
+    },
+    {
+      "path": "src/emit/cuda/mod.rs",
+      "bytes": 1162,
+      "sha256": "62fe14eac50d603408d2ec79241155093802cfa88b3f8c6d432ed081eacf7011"
+    },
+    {
+      "path": "src/emit/cuda/persistent/access.rs",
+      "bytes": 1800,
+      "sha256": "64bdf35d934411f693bcb3bda5ac8ef785120b14680ab9f6b523bc975398bb69"
+    },
+    {
+      "path": "src/emit/cuda/persistent/graph.rs",
+      "bytes": 11169,
+      "sha256": "2cdb2dc51c5d191a0b32bc977831e77ec00c149a6b38655fdbda5cd84824d17c"
+    },
+    {
+      "path": "src/emit/cuda/persistent/host.cu.j2",
+      "bytes": 10905,
+      "sha256": "c2dd80d36474ad89cbdd48741f5b1b1d2bbf0da4c5d68da6972950a939616ea5"
+    },
+    {
+      "path": "src/emit/cuda/persistent/kernels.cu.j2",
+      "bytes": 1174,
+      "sha256": "2560fea55aec8fee0ac6b17897e8db576186525824ee388ff136e0c510283014"
+    },
+    {
+      "path": "src/emit/cuda/persistent/mod.rs",
+      "bytes": 4869,
+      "sha256": "65337baf493393d7020141391b7858906767ef44ea441fb57f50693f11e3e582"
+    },
+    {
+      "path": "src/emit/cuda/persistent/program.cu.j2",
+      "bytes": 1757,
+      "sha256": "3e98cfddc6666b397ec83ba5847a23ababa6727aafbe78ffe247be42d91d0842"
+    },
+    {
+      "path": "src/emit/cuda/persistent/render.rs",
+      "bytes": 3209,
+      "sha256": "70c9abea8f2efde2351f2d94f1076907676f26ccb79e67945dbae5455cd69a21"
+    },
+    {
+      "path": "src/emit/cuda/persistent/runtime.cuh",
+      "bytes": 7632,
+      "sha256": "fe200076a565730f238cc93aa196faa4632f7633d059206781d13ecf7d016694"
+    },
+    {
+      "path": "src/emit/cuda/persistent/types.cuh",
+      "bytes": 1195,
+      "sha256": "8f601fe31eb58a4352e09fc2876fa2e5483f271142b1ed7787a956ba8debb7e7"
+    },
+    {
+      "path": "src/emit/cuda/prepare.rs",
+      "bytes": 1199,
+      "sha256": "731ee1bc066d33658cadeb4bdbdccec15be90eb8753ef7615dabf5288711163d"
+    },
+    {
+      "path": "src/emit/cuda/regions.rs",
+      "bytes": 2368,
+      "sha256": "d252ec4100276a10cb662d60b8c8f14cfdfb782752c2e6af353078ef7af47d5f"
+    },
+    {
+      "path": "src/emit/cuda/render.rs",
+      "bytes": 3956,
+      "sha256": "b6a5ccc46833139c37c876155c26f6d87d2e5dc9698c0c5fd6a6c324d6da1912"
+    },
+    {
+      "path": "src/emit/cuda/requirements.rs",
+      "bytes": 3143,
+      "sha256": "d0c08f1f3ff019e39c66020843a1b8406e9851b8573a3ddd5380eef77749a7ab"
+    },
+    {
+      "path": "src/emit/cuda/source.rs",
+      "bytes": 829,
+      "sha256": "2f17a54320ae3770857e4c4abb36eba6f78661041953007a121461e75d2837ea"
+    },
+    {
+      "path": "src/emit/cuda/streamed/host.cu.j2",
+      "bytes": 4251,
+      "sha256": "678e1788b2231b5a98f6ddea98992f97fdb7149f110ca9cb54bc9b1825701377"
+    },
+    {
+      "path": "src/emit/cuda/streamed/kernels.cu.j2",
+      "bytes": 355,
+      "sha256": "e74d89d3170d252618180a2d2952908e891a62113310e28f34e9f04fe788de18"
+    },
+    {
+      "path": "src/emit/cuda/streamed/mod.rs",
+      "bytes": 6662,
+      "sha256": "d894a53dd66bb3fca303f9289a2110bbf2d820e56b05af996dd56ebb00188382"
+    },
+    {
+      "path": "src/emit/cuda/streamed/program.cu.j2",
+      "bytes": 393,
+      "sha256": "640dc24496883f572ea8f689f9ef3643e73797ea9d00bb3e37d609cef8bc399e"
+    },
+    {
+      "path": "src/emit/cuda/streamed/render.rs",
+      "bytes": 2177,
+      "sha256": "dc14bd67f306273014dadac1b758893b4caa47a48d9f1994fdbe1962f208c096"
+    },
+    {
+      "path": "src/emit/cuda/streamed/runtime.cuh",
+      "bytes": 362,
+      "sha256": "b697470d350041be55196901882a0948c7d5bb046d15b22c91c1f50c40cb7bb5"
+    },
+    {
+      "path": "src/emit/cuda/streamed/types.cuh",
+      "bytes": 217,
+      "sha256": "5fbe97f90b9a36c0d03c20151853faa7ef90743c30aa2ddce242d28f80eeb470"
+    },
+    {
+      "path": "src/emit/cuda/templates/headers.cu.j2",
+      "bytes": 535,
+      "sha256": "d8996fede5ab37f5a8b65b713a60b7b2d8724d3cde05e28d3336399ca4892411"
+    },
+    {
+      "path": "src/emit/cuda/tests.rs",
+      "bytes": 13402,
+      "sha256": "25e84d499b9c192bd3f7e40675eef47b130c5faa5e50cd0ecf101aadea097f33"
+    },
+    {
+      "path": "src/emit/cuda/types.cuh",
+      "bytes": 251,
+      "sha256": "b300a59ab208c30eabf1e544a1ba988886f7ef4853368432c4c6cf60d12ef4c1"
+    },
+    {
+      "path": "src/emit/cuda/validation.rs",
+      "bytes": 6702,
+      "sha256": "fa3f7a2c2da178d28062f02efb38b37ed7e21b63481f50853fe081ec0e12b9c5"
+    },
+    {
+      "path": "src/emit/error.rs",
+      "bytes": 350,
+      "sha256": "6db7529bbeea1da01e03e929c43020a8afc45ba82fc4ef98075231881a4b9ab3"
+    },
+    {
+      "path": "src/emit/mod.rs",
+      "bytes": 1216,
+      "sha256": "9469072d7b025799b2a2f8a35670400036377b08943e8117c5964465a1ed1e83"
+    },
+    {
+      "path": "src/emit/prepare.rs",
+      "bytes": 668,
+      "sha256": "1711c1f454acec525d7a07206ca769045a36c641f71d0d3053d86b4c7f2bf1ff"
+    },
+    {
+      "path": "src/emit/source.rs",
+      "bytes": 149,
+      "sha256": "ac2192d25fd12281e8109d1bf90f433aa3d4df25ea8cd3b63fd22d94c098aba1"
+    },
+    {
+      "path": "src/fusion/graph.rs",
+      "bytes": 2637,
+      "sha256": "7e228391a209b5623284c627100ddb51eeb1834e9ff5e6491bb2dee7fad378e3"
+    },
+    {
+      "path": "src/fusion/mod.rs",
+      "bytes": 7415,
+      "sha256": "b63422e212780eaee57ce784f7deae0b38835d14431c374807315b7fb961b26e"
+    },
+    {
+      "path": "src/implementation/cuda/all_gather/mod.rs",
+      "bytes": 496,
+      "sha256": "3c888575db9e433acebebc74141a0517f319131979dc4c491dba92d66029c877"
+    },
+    {
+      "path": "src/implementation/cuda/all_gather/nvls.cu.j2",
+      "bytes": 2225,
+      "sha256": "1e55ab7c34fdeb86e4ad2ff506a3d45167e30cb4e43a619c69e0dcb02e070dc7"
+    },
+    {
+      "path": "src/implementation/cuda/all_gather/nvls.rs",
+      "bytes": 8364,
+      "sha256": "0e72f8eac471c3e4b6a7976d9baffc70a479516cb8a6c69459a56514ddaa5e03"
+    },
+    {
+      "path": "src/implementation/cuda/all_gather/peer.cu.j2",
+      "bytes": 1604,
+      "sha256": "e7b258cf9e684ebf6a2e1985d1e685b3b3f5cf46690454408e6890337323db4e"
+    },
+    {
+      "path": "src/implementation/cuda/all_gather/peer.rs",
+      "bytes": 13847,
+      "sha256": "c2d5f1cf8eb52ee24413819564a657986cfe053b2c34b36c98e6fdfe511e8f98"
+    },
+    {
+      "path": "src/implementation/cuda/broadcast/mod.rs",
+      "bytes": 3386,
+      "sha256": "55f9575b2a67e639b6093bd00b606e44c4ff40708e70e17d542e51d1f6484240"
+    },
+    {
+      "path": "src/implementation/cuda/expression.rs",
+      "bytes": 1662,
+      "sha256": "316410d4d281effdc9f514280559e09372fe0e4f012af59b18d23153a435011e"
+    },
+    {
+      "path": "src/implementation/cuda/fusion/hopper.rs",
+      "bytes": 7705,
+      "sha256": "2910f1d27f89c589c44e604bfdab5cef9e59a2e461dc5aceb82c957bfb563cdc"
+    },
+    {
+      "path": "src/implementation/cuda/fusion/mod.rs",
+      "bytes": 303,
+      "sha256": "14be24be1c62dbc6c315c13b3f2ad0505830ad0ae2bc53e7f6d21ad73ead893b"
+    },
+    {
+      "path": "src/implementation/cuda/fusion/pointwise.rs",
+      "bytes": 2296,
+      "sha256": "419076386c05afd27a758f74ed749adde706fc354916a05262544b90197c8f8b"
+    },
+    {
+      "path": "src/implementation/cuda/gemm/hopper_wgmma/epilogue.cu",
+      "bytes": 139,
+      "sha256": "661c5d7042dee35208020023a2b610f793e60f68c7e37e99a985f74b6d4dbffa"
+    },
+    {
+      "path": "src/implementation/cuda/gemm/hopper_wgmma/mainloop.cu",
+      "bytes": 1280,
+      "sha256": "e3c43cedb5b3785dba21b67d3532401937b9721a47d10a034aca2846f82e3108"
+    },
+    {
+      "path": "src/implementation/cuda/gemm/hopper_wgmma/mod.rs",
+      "bytes": 15024,
+      "sha256": "a56ae709e7ed5c63f4989c6170800ffc81cb1e623bf7d11826aa2320b5dee183"
+    },
+    {
+      "path": "src/implementation/cuda/gemm/hopper_wgmma/prologue.cu",
+      "bytes": 1803,
+      "sha256": "9638bd5e1bad9633baa1cb23d821d97ef4f84743bcba338e66c01c8b0f87fdef"
+    },
+    {
+      "path": "src/implementation/cuda/gemm/mod.rs",
+      "bytes": 141,
+      "sha256": "649a8c35d1636b3004f4e16f4f8885a314197bc7c72e77257722afe1aab2709e"
+    },
+    {
+      "path": "src/implementation/cuda/mod.rs",
+      "bytes": 1557,
+      "sha256": "6e384b41ffec5ea99fc078c8f4178ed46607b5ffacccb07e929118bfabac4913"
+    },
+    {
+      "path": "src/implementation/cuda/pointwise/mod.rs",
+      "bytes": 7129,
+      "sha256": "be50f677bf10d04b4a93d8025e8c41083bf3c63e8c299f1fb1868679938d21ba"
+    },
+    {
+      "path": "src/implementation/cuda/reduce_sum/mod.rs",
+      "bytes": 3257,
+      "sha256": "174bb756c460f7da21addd6222a208b212169c98bb98e63a7dc2dbf317aaee27"
+    },
+    {
+      "path": "src/implementation/mod.rs",
+      "bytes": 5302,
+      "sha256": "8a607648becfdf242c17a94c1835b932483f215538a4708e8cbfb99a6da413b2"
+    },
+    {
+      "path": "src/implementation/tensor.rs",
+      "bytes": 2163,
+      "sha256": "002223fef07a2981db4c484afaf4fe440f756ec22cbc4f1502663c0ea430913c"
+    },
+    {
+      "path": "src/plan/loops.rs",
+      "bytes": 8311,
+      "sha256": "eaa3f022d957b2ca4ab71570ab2e3cd40ac4de6eba23d6f5ce1550d1477e1681"
+    },
+    {
+      "path": "src/plan/rewrite.rs",
+      "bytes": 5734,
+      "sha256": "95e45a576935d50877e85db879084388ae63f4af29b45edac75ec0602c72d426"
+    },
+    {
+      "path": "src/tests.rs",
+      "bytes": 11342,
+      "sha256": "cb25b403be2f6f54ecab2db5f426774c772e4642232fabce86fbccbf1291475b"
+    },
+    {
+      "path": "tests/compile_cuda.rs",
+      "bytes": 6419,
+      "sha256": "99a74a1dd1333c38d19834412d40479602cc3afde4279811e401f900965339e2"
+    },
+    {
+      "path": "tests/emit.rs",
+      "bytes": 18621,
+      "sha256": "39c445a2f8d660bd5c45f0b9495e3006de6ea3d83a3581b4153b98623f8dbd0f"
+    },
+    {
+      "path": "tests/emit_scheduler.rs",
+      "bytes": 12392,
+      "sha256": "4a6c3a217b7640ffbc00fea8e030e3a25beb726553d291ae684561aa5f127fc3"
+    },
+    {
+      "path": "tests/fixtures/loop_ir/IR.v3.meta.json",
+      "bytes": 7821,
+      "sha256": "cecdfd678f93090ba670ad91c563f78e1714c566bf54b1b8682bb17ee791f147"
+    },
+    {
+      "path": "tests/fixtures/loop_ir/IR.v3.split_k.txt",
+      "bytes": 7662,
+      "sha256": "bc5801ad59ed5cff182aa3aa2cd037018bf1fc6b26342a593a00f9c2d4cc3765"
+    },
+    {
+      "path": "tests/fixtures/loop_ir/IR.v3.txt",
+      "bytes": 6456,
+      "sha256": "eeacd9cee7a939630a331c52a0355f1e40f5751ea211bc31cc656708a32709fd"
+    },
+    {
+      "path": "tests/fusion.rs",
+      "bytes": 12059,
+      "sha256": "e471cd625f6f7a14252ee9d7dee970894b51a330cf6cd6550d2772701e17609d"
+    },
+    {
+      "path": "tests/loop_ir.rs",
+      "bytes": 8779,
+      "sha256": "891ca074e9520f3f1cad7fb74cf63cef5d0ae84b59ae20f046436f5e5e68be84"
+    },
+    {
+      "path": "tests/physical_plan.rs",
+      "bytes": 3408,
+      "sha256": "20c627d0b712bd0c47578bc60164c1d8abdb625b72022409fb97ca7b6f1e3bab"
+    },
+    {
+      "path": "tests/support/loop_ir.rs",
+      "bytes": 2447,
+      "sha256": "d7bc144dfc7771e72b0c96fc3f8fafcdf0034aed77c4ad6599ef4d61726ea4b0"
+    },
+    {
+      "path": "tests/support/mod.rs",
+      "bytes": 6701,
+      "sha256": "5beeab19d5dace5f3ec814c8f244619abce6d447aa7ddd3832cde49bb9335fcc"
+    },
+    {
+      "path": "tests/support/tensor.rs",
+      "bytes": 5875,
+      "sha256": "99381e821737b517cd301d74c95f730cd72a43859da39f7e65923ac6fb9cac54"
+    },
+    {
+      "path": "tests/task_domain.rs",
+      "bytes": 13516,
+      "sha256": "9f2b19d46e372cf41b9596091e5d8a77cd76f63c2eb495b7bc3f76a09e3ef9af"
+    },
+    {
+      "path": "tests/tensor_ops.rs",
+      "bytes": 11514,
+      "sha256": "24e65960be2f5def83d707cc389ddf675e986ad1fc8f575be88cb901b58c7bc8"
+    },
+    {
+      "path": "tests/unified_lowering.rs",
+      "bytes": 9599,
+      "sha256": "f6f46168a065d4cde524089f4451f7edf3767df2f86647b2df4a625564a0c0e2"
+    }
+  ]
+}
