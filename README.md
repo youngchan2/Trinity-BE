@@ -1,56 +1,77 @@
-# trinity-lowering
+# Trinity Lowering
 
-> Native Streamed emission is connected for Hopper, sm_89 and sm_120. Explicit
-> IR/Builder plans can generate CUDA artifacts using pointwise, reduction, GEMM
-> and Register continuations. Persistent, communication, Shared tensor transport
-> and Opaque emission remain unsupported. The previous emitter is reference-only
-> under [old/emit-rewrite](old/emit-rewrite/README.md).
+Trinity Lowering provides physical planning, CUDA code generation, and compilation for explicit tensor programs, with a runtime for PyTorch Tensor execution.
 
-Build concrete tensor program plans, compile them into CUDA artifacts, and run
-them with PyTorch Tensors.
-
-Rust handles implementation selection, physical plan validation, CUDA emission,
-and compilation. The Python API binds Tensors to a C++ runtime that owns native
-loading and execution.
-
-The CUDA backend emits single-GPU Streamed programs for `sm_90a`, `sm_89` and
-`sm_120`. The retained NVSHMEM runtime is not yet connected to the new emitter.
-
-Contiguous BF16/FP32 vectors and matrices support pointwise arithmetic, ReLU,
-row sums and explicit row broadcasting. See the
-[Python operator guide](python/README.md#pointwise-operations) for enumeration
-and dtype contracts.
+The compiler selects kernel implementations for a physical plan and produces
+CUDA artifacts. The runtime loads these artifacts and executes them with
+PyTorch Tensors bound through the Python API.
 
 ## Getting started
 
-Follow the [Python/PyTorch guide](python/README.md) for prerequisites,
-installation, and a complete single-GPU BF16 matrix multiplication example.
+### Prerequisites
 
-The uv project is rooted in this directory, alongside `Cargo.toml`. Python
-sources, examples, and tests live under `python/`.
+- Linux x86-64
+- NVIDIA GPU listed in the [supported targets](docs/architecture/emission.md#대상-하드웨어).
+- CUDA Toolkit 13.0 and a compatible NVIDIA driver.
+- uv, Python 3.12, Rust, and a C++17 compiler.
+
+The examples below use the default Hopper target.
+
+### Installation
+
+Run the following commands from the `trinity-lowering` source directory
+containing `pyproject.toml` and `Cargo.toml`:
+
+```sh
+git submodule update --init --recursive third_party/cutlass
+export CUDA_HOME=/usr/local/cuda-13.0
+export CUTLASS_HOME="$PWD/third_party/cutlass"
+
+uv sync --no-install-project
+TRINITY_BUILD_CUDA=1 MAX_JOBS=1 uv pip install --no-build-isolation --no-deps -e .
+```
+
+Adjust `CUDA_HOME` to the local CUDA Toolkit path. The uv project in this
+directory pins PyTorch 2.9.1+cu130. Run subsequent commands from this directory.
+
+### Examples
+
+Run BF16 matrix multiplication with bias addition:
+
+```sh
+uv run --no-sync python python/examples/streamed.py
+```
+
+The example compiles the program, binds PyTorch Tensors, executes it on a CUDA
+stream, and checks the result against a PyTorch reference.
+
+For CUDA Graph capture and replay with an additional ReLU operation:
+
+```sh
+uv run --no-sync python python/examples/graph.py
+```
+
+## How it works
+
+![Trinity Lowering architecture](docs/images/trinity-lowering-architecture.svg)
+
+- **Planning** establishes a validated physical plan for the input tensor program.
+- **Emission** translates the plan into CUDA code for the target hardware.
+- **Compilation** makes the generated code executable by the runtime.
+
+See the [architecture guide](docs/architecture/README.md) for the public API and details of each stage.
 
 ## Source layout
 
 | Location | Purpose |
 | --- | --- |
 | [src/plan](src/plan/) | Physical plan construction and validation |
-| [src/implementation/definitions](src/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
-| [src/emit](src/emit/) | Entry point for the emitter rebuild |
+| [src/implementation/definitions](src/implementation/definitions/) | Implementation definitions and applicability enumeration |
+| [src/emit](src/emit/) | Kernel selection, execution placement, and CUDA source generation |
 | [src/compile/cuda](src/compile/cuda/) | NVCC compilation and artifact ownership |
 | [src/python.rs](src/python.rs) | Python compiler bindings |
-| [src/native](src/native/) | Tensor execution, NVSHMEM, and CUDA Graph runtime |
+| [src/native](src/native/) | Native loading, Tensor execution, and CUDA Graph runtime |
 | [python](python/) | Python API, examples, and integration tests |
-
-`PhysicalPlanBuilder` accepts an explicit ordered Loop/Operation program. Compute
-operations require a supplied store expression; `build()` never infers loops,
-tiles, or computation bodies. It normalizes names/operands, checks structural
-invariants, and canonicalizes IDs while preserving execution order.
-
-The removed automatic expansion and `ImplementationDefinition::schedule()` contract
-are preserved under [old/plan-rewrite](old/plan-rewrite/README.md). Implementation
-identities and applicability enumeration remain under `definitions`; these do not
-construct programs. Python stays in place and supports explicit body expressions
-and `add_loop()` nodes. See [plans.py](python/examples/plans.py).
 
 ## Development
 
@@ -62,40 +83,3 @@ uv run --no-sync cargo clippy -p trinity-lowering --all-targets --locked -- -D w
 uv run --no-sync cargo test -p trinity-lowering --locked
 uv run --no-sync pytest
 ```
-
-The default tests do not require a GPU. Generated-kernel execution tests require
-Hopper hardware; multi-GPU integration tests additionally require NVLink and
-NVSHMEM.
-
-## Explicit plan inputs
-
-`lower_ir` reads the loops, accesses and expressions already present in the input.
-Its `mloop` normalization translates the specified split into parallel/sequential
-loops; it does not select a new tile or schedule. Direct Rust Builder calls register
-operations with `add_operation(inflows, outflows, expression)`, then pass the top-level
-`Vec<Statement>` to `build(statements, output_name, output)`.
-
-Operations own their expressions directly. Neither the Reader nor the Builder selects
-an implementation; selection belongs to Emit. Recognized reductions implicitly start
-at zero, with initialization generated by Emit. Builder communication uses an explicit
-`all_gather` expression; textual communication IR remains deferred. See
-[Planning](docs/architecture/planning.md) and [Emit design](docs/architecture/emission.md).
-
-The producer of the IR or direct Builder input is responsible for validating loop
-ranges and memory accesses. Plan construction validates structural consistency.
-
-The current `trinity::lower(candidate, ...)` input contains a whole-tensor DAG, not
-an explicit loop program. Its automatic expansion path has been retired and now
-returns `LoweringError::ExplicitProgramRequired`. Candidate extraction itself is
-unchanged; reconnecting it requires a separate explicit-program contract.
-
-Emission supports independent constant parallel domains and constant sequential
-loops within a CTA. Dependent bounds and parallel work inside a sequential loop
-are rejected. Execution placement checks region coverage and inter-CTA hazards,
-then renders a shared device body, Streamed wrappers and the existing host ABI.
-Kernel launch thread counts and scratch sizes are resolved individually.
-
-Compiler/runtime work follows [PLAN.md](../../docs/draft/PLAN.md). Public fusion
-candidate generation remains unavailable. CUDA compile/link and GPU execution
-validation are recorded separately; GPU accuracy has not been verified in the
-current driver-inaccessible environment.
