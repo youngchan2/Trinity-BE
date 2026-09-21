@@ -548,6 +548,12 @@ fn emit(py: Python<'_>, plan: PyRef<'_, PhysicalPlan>) -> PyResult<CudaSource> {
     })
 }
 
+#[pyfunction]
+fn emit_python(py: Python<'_>, plan: PyRef<'_, PhysicalPlan>) -> PyResult<String> {
+    let p = plan.0.clone();
+    py.allow_threads(move || tl::emit::emit_python(&p).map(|p| p.emit()).map_err(bad))
+}
+
 #[pyclass(frozen, module = "trinity_lowering._compiler")]
 #[derive(Clone)]
 struct CompileConfig(tl::CompileConfig);
@@ -682,6 +688,7 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reduce_sum_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(broadcast_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(emit, m)?)?;
+    m.add_function(wrap_pyfunction!(emit_python, m)?)?;
     m.add_function(wrap_pyfunction!(lower_ir, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
 

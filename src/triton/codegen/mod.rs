@@ -8,10 +8,10 @@ mod ops;
 mod scalar;
 mod wrapper;
 
-use super::ProgramPlan;
+use super::TritonPlan;
 use context::CodegenContext;
 
-impl ProgramPlan {
+impl TritonPlan {
     /// Emit every kernel and the named forward wrapper into one Python source string.
     pub fn emit(&self) -> String {
         let mut w = CodegenContext::default();

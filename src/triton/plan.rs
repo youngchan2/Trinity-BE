@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum Storage {
     Register,
     Global,
-    /// Existing backend's cross-sloop tensor, supplied by the caller in fp16.
+    /// Cross-sloop tensor supplied by the caller using its declared storage dtype.
     Materialized,
 }
 
@@ -71,21 +71,22 @@ pub struct LocalRead {
     pub axes: Vec<(usize, usize)>,
 }
 
+/// Triton/Python naming and tuning decisions. Logical tensor metadata belongs
+/// to ProgramFacts, available through TritonPlan::common.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramMetadata {
     pub tensor_names: Vec<String>,
-    pub shapes: BTreeMap<TensorId, Vec<IndexExpr>>,
-    pub aliases: BTreeMap<String, String>,
-    pub dimensions: BTreeMap<String, (TensorId, usize)>,
-    pub splits: BTreeMap<String, ScopeId>,
     pub candidates: BTreeMap<String, Vec<i64>>,
+    /// The one launch responsible for tuning each split parameter.
+    pub split_owners: BTreeMap<String, ScopeId>,
 }
 
 /// One selected IR program, including all kernels and its Python wrapper.
 /// Kernel-local decisions live in each KernelPlan; syntax and options are shared.
 #[derive(Debug, Clone)]
-pub struct ProgramPlan {
-    pub(crate) analysis: ProgramAnalysis,
+pub struct TritonPlan {
+    pub(crate) analysis: ScheduledIr,
+    pub(crate) common: ProgramFacts,
     pub(crate) options: Options,
     pub(crate) kernels: Vec<KernelPlan>,
     pub(crate) accesses: Vec<TileAccess>,
@@ -94,9 +95,20 @@ pub struct ProgramPlan {
     pub(crate) metadata: ProgramMetadata,
 }
 
-impl ProgramPlan {
-    pub fn analysis(&self) -> &ProgramAnalysis {
+impl TritonPlan {
+    pub(crate) fn tensor_dtype(&self, tensor: TensorId) -> super::TensorDType {
+        self.options
+            .dtypes
+            .get(&self.analysis.tensor(tensor).name)
+            .copied()
+            .unwrap_or_default()
+    }
+    pub fn analysis(&self) -> &ScheduledIr {
         &self.analysis
+    }
+    /// Shared logical accesses and dataflow, before Triton padding or storage decisions.
+    pub fn common(&self) -> &ProgramFacts {
+        &self.common
     }
     pub fn kernels(&self) -> &[KernelPlan] {
         &self.kernels

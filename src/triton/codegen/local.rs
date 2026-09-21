@@ -1,9 +1,9 @@
 //! Read an earlier register definition through a compatible view or sub-tile.
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, EmittedValue, tuple};
 use crate::analysis::*;
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn local_load(
         &self,
         id: AccessId,

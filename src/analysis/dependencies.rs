@@ -2,7 +2,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn common_scope(ir: &ProgramAnalysis, uses: &[AccessId]) -> ScopeId {
+pub(crate) fn common_scope(ir: &ScheduledIr, uses: &[AccessId]) -> ScopeId {
     let mut scope = ir.access(uses[0]).scope;
     for access in &uses[1..] {
         while !ir.is_within(ir.access(*access).scope, scope) {
@@ -14,12 +14,12 @@ pub(crate) fn common_scope(ir: &ProgramAnalysis, uses: &[AccessId]) -> ScopeId {
 
 /// Tensor-level loop-variable dependence; not a versioned definition-use graph.
 pub(crate) fn tensor_loop_dependencies(
-    ir: &ProgramAnalysis,
+    ir: &ScheduledIr,
     kernel: &KernelInfo,
 ) -> BTreeMap<TensorId, BTreeSet<ScopeId>> {
     fn expr_deps(
         expr: &ValueExpr,
-        ir: &ProgramAnalysis,
+        ir: &ScheduledIr,
         deps: &BTreeMap<TensorId, BTreeSet<ScopeId>>,
     ) -> BTreeSet<ScopeId> {
         match expr {

@@ -1,15 +1,17 @@
 //! One spelling for each IR scalar in bounds, shapes, grids and tuning metadata.
-use super::super::lowering::metadata::{identifier, symbols};
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::lowering::metadata::identifier;
+use super::super::{KernelPlan, TritonPlan};
+use crate::analysis::scalar::symbols;
 use crate::analysis::*;
 use std::collections::BTreeSet;
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn tensor_name(&self, id: TensorId) -> &str {
         &self.metadata.tensor_names[id.index()]
     }
     pub(super) fn canonical_symbol<'a>(&'a self, name: &'a str) -> &'a str {
-        self.metadata
+        self.common
+            .metadata
             .aliases
             .get(name)
             .map(String::as_str)
@@ -19,6 +21,7 @@ impl ProgramPlan {
         let symbol = self.canonical_symbol(symbol);
         let name = identifier(symbol);
         let conflict = self
+            .common
             .metadata
             .dimensions
             .keys()
@@ -59,7 +62,8 @@ impl ProgramPlan {
         used.into_iter()
             .map(|s| self.canonical_symbol(&s).to_owned())
             .filter(|s| {
-                self.metadata.dimensions.contains_key(s) || self.metadata.candidates.contains_key(s)
+                self.common.metadata.dimensions.contains_key(s)
+                    || self.metadata.candidates.contains_key(s)
             })
             .collect()
     }
@@ -71,7 +75,7 @@ impl ProgramPlan {
                 self.metadata.candidates.contains_key(s)
                     && self
                         .metadata
-                        .splits
+                        .split_owners
                         .get(s)
                         .is_none_or(|scope| self.analysis.scope(*scope).kernel == ki)
             })

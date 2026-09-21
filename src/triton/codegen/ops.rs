@@ -1,9 +1,9 @@
 //! Scalar, pointwise, reduction, transform and dot expressions with value validity.
 use super::super::plan::{Expr, ExprKind};
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, EmittedValue, tuple};
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn expression(
         &self,
         expr: &Expr,
@@ -167,10 +167,21 @@ impl ProgramPlan {
                 let small = [&a.shape[rank - 2], &a.shape[rank - 1], &b.shape[rank - 1]]
                     .iter()
                     .any(|s| s.parse::<usize>().is_ok_and(|v| v < 16));
-                let dtype = if small && (self.options.managed || rank > 3) {
+                // Explicit operand casts from typed frontends select dot precision.
+                // Unannotated source IR retains the historical FP16 dot policy.
+                let explicit = match (&left.kind, &right.kind) {
+                    (ExprKind::Cast(a, _), ExprKind::Cast(b, _)) if a == b => Some(a.as_str()),
+                    _ => None,
+                };
+                let dtype = if small && (self.options.managed || rank > 3 || explicit.is_some()) {
                     "float32"
                 } else {
-                    "float16"
+                    explicit.unwrap_or("float16")
+                };
+                let precision = if dtype == "float32" {
+                    ", input_precision='ieee'"
+                } else {
+                    ""
                 };
                 let av = format!("({}).to(tl.{dtype})", neutralized(&a, rank - 1, "0.0"));
                 let bv = format!("({}).to(tl.{dtype})", neutralized(&b, rank - 2, "0.0"));
@@ -190,7 +201,7 @@ impl ProgramPlan {
                     let mut output = batch.clone();
                     output.extend([a.shape[rank - 2].clone(), b.shape[rank - 1].clone()]);
                     format!(
-                        "tl.reshape(tl.dot(tl.reshape(tl.broadcast_to({av}, {}), ({batches}, {}, {})), tl.reshape(tl.broadcast_to({bv}, {}), ({batches}, {}, {}))), {})",
+                        "tl.reshape(tl.dot(tl.reshape(tl.broadcast_to({av}, {}), ({batches}, {}, {})), tl.reshape(tl.broadcast_to({bv}, {}), ({batches}, {}, {})){precision}), {})",
                         tuple(ashape),
                         a.shape[rank - 2],
                         a.shape[rank - 1],
@@ -200,7 +211,7 @@ impl ProgramPlan {
                         tuple(output)
                     )
                 } else {
-                    format!("tl.dot({av}, {bv})")
+                    format!("tl.dot({av}, {bv}{precision})")
                 };
                 if self.options.managed
                     && !small
@@ -409,7 +420,7 @@ fn neutralized(value: &EmittedValue, axis: usize, identity: &str) -> String {
     match &value.valid[axis] {
         Some(mask) => {
             let mask = if value.shape.len() > 1 {
-                format!("({mask})[{}]", ProgramPlan::slice(value.shape.len(), axis))
+                format!("({mask})[{}]", TritonPlan::slice(value.shape.len(), axis))
             } else {
                 mask.clone()
             };

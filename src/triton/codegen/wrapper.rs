@@ -1,10 +1,10 @@
 //! Autotune configurations, benchmark metadata and the named forward ABI.
 use super::super::shape::{loop_range, positive};
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, tuple};
 use std::collections::BTreeSet;
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn autotune(&self, kernel: &KernelPlan, w: &mut CodegenContext) {
         if self.options.managed {
             self.managed_autotune(kernel, w);

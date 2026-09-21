@@ -37,15 +37,15 @@ fn symbol(node: &IrNode) -> Result<&str, AnalysisError> {
     Ok(node.head())
 }
 
-pub fn analyze_text(text: &str) -> Result<ProgramAnalysis, AnalysisError> {
+pub fn analyze_text(text: &str) -> Result<ScheduledIr, AnalysisError> {
     analyze(IrNode::parse(text)?)
 }
 
 /// Collect one extracted program. The returned snapshot owns the unmodified IR.
-pub fn analyze(root: IrNode) -> Result<ProgramAnalysis, AnalysisError> {
+pub fn analyze(root: IrNode) -> Result<ScheduledIr, AnalysisError> {
     let mut collector = Collector::default();
     collector.program(&root)?;
-    Ok(ProgramAnalysis {
+    Ok(ScheduledIr {
         ir: root,
         tensors: collector.tensors,
         kernels: collector.kernels,
@@ -188,7 +188,7 @@ impl Collector {
                 chunk,
             ),
         );
-        // The original atomic mloop stays in ProgramAnalysis.ir. Two lexical
+        // The original atomic mloop stays in ScheduledIr.ir. Two lexical
         // scopes give its two bindings distinct IDs without inventing a schedule.
         for (id, parent, kind, info) in [
             (

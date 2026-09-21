@@ -1,0 +1,33 @@
+
+
+def run(values, *, tuned=False):
+    """Run this operation using caller-owned tensors keyed by Plan value index.
+
+    Candidate discovery does not prove installed-library support. Compile, check
+    correctness and benchmark on the intended device before selecting this call.
+    """
+    import torch
+
+    out = values[_OUTPUT_ID]
+    for index, dtype, shape in _EXPECTED:
+        tensor = values[index]
+        if not tensor.is_cuda or tensor.device != out.device:
+            raise ValueError('Quack arguments must be on the same CUDA device')
+        if tensor.dtype != getattr(torch, dtype) or tuple(tensor.shape) != tuple(shape):
+            raise ValueError(f'Quack value {index}: dtype or shape differs from the plan')
+        if not tensor.is_contiguous() or tensor.data_ptr() % 16:
+            raise ValueError(f'Quack value {index}: expected contiguous, 16-byte aligned storage')
+    if torch.cuda.get_device_capability(out.device) != _CAPABILITY:
+        raise ValueError('Quack device capability differs from the candidate target')
+    output_storage = out.untyped_storage().data_ptr()
+    if any(values[i].untyped_storage().data_ptr() == output_storage for i in _INPUT_IDS):
+        raise ValueError('Quack adapter requires output storage separate from inputs')
+
+    # No dependency on Quack until this candidate is actually invoked.
+    from quack.gemm_interface import @API@
+
+    # Follow the output device's current stream, including when another device
+    # is active in the calling thread. No global synchronization is inserted.
+    with torch.cuda.device(out.device):
+        @CALL@
+    return out

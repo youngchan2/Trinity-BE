@@ -10,6 +10,8 @@ pub(super) mod access;
 mod code;
 mod cute;
 mod interface;
+pub(super) mod quack;
+pub(super) mod triton;
 pub(super) use code::{KernelCode, RegisterBinding, render_index_expression};
 pub(super) use cute::{
     CuTeKernelProvider, HopperGemmSpecification, PointwiseSpecification, ReduceSumSpecification,
@@ -26,8 +28,8 @@ pub(super) struct KernelContext<'a, 'plan> {
     pub loops: &'a [&'plan Loop],
 }
 
-/// Specifies one implementation per operation and renders kernels using a shared code
-/// generation approach, such as CuTe.
+/// Enumerates implementations per operation. Native implementations can be composed
+/// inside CUDA bodies; opaque implementations describe independent host calls.
 ///
 /// A provider can delegate to different [`KernelImplementation`] paths according
 /// to the operation, hardware generation, and topology.
@@ -35,12 +37,26 @@ pub(super) trait KernelProvider {
     /// Returns the provider's name.
     fn name(&self) -> &str;
 
+    /// Keep alternatives until selection. The default adapts the existing native
+    /// provider; opaque providers override this without supplying CUDA bindings.
+    fn candidates(
+        &self,
+        context: &KernelContext<'_, '_>,
+    ) -> Result<Vec<super::candidate::CandidateSpecification>, ProviderError> {
+        self.specify(context)
+            .map(|s| vec![super::candidate::CandidateSpecification::Native(s)])
+    }
+
     /// Returns one supported implementation for later combination and rendering.
     ///
     /// Uses the operation, enclosing loops, and execution model in [`KernelContext`]
     /// to check support conditions. The [`SpecifiedKernel`] contains the implementation
     /// requirements and the information needed to render it without consulting the Plan.
-    fn specify(&self, context: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError>;
+    fn specify(&self, _context: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "provider has no native implementation".into(),
+        ))
+    }
 
     /// Renders the selected specification using the resolved bindings.
     ///
@@ -49,9 +65,13 @@ pub(super) trait KernelProvider {
     /// identifier prefix. Returns the kernel code for Emit to assemble into its output.
     fn render(
         &self,
-        specification: &SpecifiedKernel,
-        bindings: &KernelBindings,
-    ) -> Result<Kernel, ProviderError>;
+        _specification: &SpecifiedKernel,
+        _bindings: &KernelBindings,
+    ) -> Result<Kernel, ProviderError> {
+        Err(ProviderError::Failed(
+            "provider has no native renderer".into(),
+        ))
+    }
 }
 
 /// Specification and rendering for one implementation path within a provider.

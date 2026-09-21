@@ -173,7 +173,7 @@ pub struct KernelInfo {
 /// Storage, liveness, initialization and precision plans are intentionally not
 /// inferred by this first collection pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProgramAnalysis {
+pub struct ScheduledIr {
     pub(super) ir: IrNode,
     pub(super) tensors: Vec<TensorInfo>,
     pub(super) kernels: Vec<KernelInfo>,
@@ -182,7 +182,7 @@ pub struct ProgramAnalysis {
     pub(super) accesses: Vec<AccessInfo>,
 }
 
-impl ProgramAnalysis {
+impl ScheduledIr {
     pub fn ir(&self) -> &IrNode {
         &self.ir
     }

@@ -1,10 +1,10 @@
 //! Tile coordinates, pointer offsets, address masks and global load/store output.
 use super::super::shape::{constant, loop_range};
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, EmittedValue};
 use crate::analysis::*;
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn index(&self, expr: &IndexExpr) -> String {
         match expr {
             IndexExpr::LoopVar(id) => self.loop_name(*id),
@@ -17,6 +17,7 @@ impl ProgramPlan {
             IndexExpr::Symbol(s)
                 if self.options.managed
                     && (self
+                        .common
                         .metadata
                         .dimensions
                         .contains_key(self.canonical_symbol(s))
@@ -428,8 +429,9 @@ impl ProgramPlan {
             format!("({value})")
         };
         w.line(format!(
-            "tl.store({}_ptr + {offset}, {value}.to(tl.float16), mask={mask})",
-            self.tensor_name(self.analysis.access(id).tensor)
+            "tl.store({}_ptr + {offset}, {value}.to(tl.{}), mask={mask})",
+            self.tensor_name(self.analysis.access(id).tensor),
+            self.tensor_dtype(self.analysis.access(id).tensor).python()
         ));
     }
 

@@ -1,10 +1,10 @@
 //! Kernel signatures, program mapping, ordered scopes and init/export placement.
-use super::super::{InitialValue, KernelPlan, ProgramPlan};
+use super::super::{InitialValue, KernelPlan, TritonPlan};
 use super::context::{CodegenContext, tuple};
 use crate::analysis::*;
 use std::collections::BTreeSet;
 
-impl ProgramPlan {
+impl TritonPlan {
     pub(super) fn kernel(&self, ki: usize, kernel: &KernelPlan, w: &mut CodegenContext) {
         self.autotune(kernel, w);
         w.line("@triton.jit");
@@ -232,7 +232,8 @@ impl ProgramPlan {
                         if self.options.managed
                             && !kernel.tensors[&tensor].accumulators.contains(&statement)
                         {
-                            code = format!("({code}).to(tl.float16)");
+                            code =
+                                format!("({code}).to(tl.{})", self.tensor_dtype(tensor).python());
                         }
                         w.line(format!("{} = {code}", self.tensor_name(tensor)));
                     } else {

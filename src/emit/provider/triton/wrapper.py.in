@@ -1,0 +1,20 @@
+
+
+def run(values, *, tuned=False):
+    out = values[_OUTPUT_ID]
+    for index, dtype, shape in _EXPECTED:
+        tensor = values[index]
+        if not tensor.is_cuda or tensor.device != out.device:
+            raise ValueError('Triton arguments must be on the same CUDA device')
+        if tensor.dtype != getattr(torch, dtype) or tuple(tensor.shape) != tuple(shape):
+            raise ValueError(f'Triton value {index}: dtype or shape differs from the plan')
+        if not tensor.is_contiguous():
+            raise ValueError(f'Triton value {index}: expected contiguous storage')
+    if torch.cuda.get_device_capability(out.device) != _CAPABILITY:
+        raise ValueError('Triton device capability differs from the candidate target')
+    output_storage = out.untyped_storage().data_ptr()
+    if any(values[i].untyped_storage().data_ptr() == output_storage for i in _INPUT_IDS):
+        raise ValueError('Triton adapter requires output storage separate from inputs')
+    with torch.cuda.device(out.device):
+        forward(@ARGUMENTS@)
+    return out

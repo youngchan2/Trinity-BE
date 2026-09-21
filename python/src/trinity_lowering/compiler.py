@@ -19,6 +19,11 @@ broadcast_implementations = _compiler.broadcast_implementations
 lower_ir = _compiler.lower_ir
 
 
+def emit_python(plan):
+    """Emit a standalone candidate-selection module for a loop-free PhysicalPlan."""
+    return _compiler.emit_python(plan)
+
+
 class CudaSource:
     def __init__(self, native):
         self._native = native

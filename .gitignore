@@ -9,3 +9,5 @@ __pycache__/
 *.egg-info/
 /generated_kernels/
 /reference_kernels/
+/docs/tmp/
+examples/

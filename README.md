@@ -3,8 +3,8 @@
 > Native Streamed emission is connected for Hopper, sm_89 and sm_120. Explicit
 > IR/Builder plans can generate CUDA artifacts using pointwise, reduction, GEMM
 > and Register continuations. Persistent, communication, Shared tensor transport
-> and Opaque emission remain unsupported. The previous emitter is reference-only
-> under [old/emit-rewrite](old/emit-rewrite/README.md).
+> and Opaque launches within the native CUDA emitter remain unsupported. The previous
+> emitter is reference-only under [old/emit-rewrite](old/emit-rewrite/README.md).
 
 Generate Triton kernels from extracted, scheduled Trinity IR, or construct explicit
 tensor program plans for the CUDA provider pipeline.
@@ -14,12 +14,18 @@ tensor program plans for the CUDA provider pipeline.
 | Scheduled Trinity IR with named views, keyed indices and split loops | `triton::compile(text, options)` | Python source containing Triton kernels and `forward(...)` |
 | Explicit IR with symbol and dtype bindings | `lower_ir(text, config)` | `PhysicalPlan` values for the CUDA provider pipeline |
 | Explicit values, operations and loops | `PhysicalPlanBuilder::build(...)` | A validated `PhysicalPlan` |
+| A `PhysicalPlan` | `emit::kernel_candidates(&plan)` | CuTe/Triton/Quack candidates and unsupported reasons per operation |
+| Single-GPU, loop-free full-tensor `PhysicalPlan` | `emit::emit_python(&plan)` | Python module with `prepare(inputs)` for validation/selection and a reusable executable |
 
 The Triton fallback remains available independently of the native CUDA emitter.
-It uses `analysis::ProgramAnalysis` and `triton::ProgramPlan`; the updated CUDA path
-uses `plan::PhysicalPlan`. Automatic conversion and cross-backend selection are not
-connected yet. Triton currently stores tensors as FP16; CUDA plans carry explicit
-dtypes. The former CUDA `lower_loop_ir` API is now named `lower_ir`.
+It uses `analysis::ScheduledIr` and `triton::TritonPlan`; the updated CUDA path
+uses `plan::PhysicalPlan`. The new Python candidate path adapts supported PhysicalPlan
+operations to Triton and compares them with Quack. Native CUDA emission is available
+through `emit(plan)`, but its implementations are not yet benchmarked alongside the
+Python candidates. Full scheduled-IR/loop integration with that selection path also
+remains separate. Unannotated Triton source IR defaults
+to FP16; typed candidates preserve the PhysicalPlan's BF16/FP32 storage.
+The former CUDA `lower_loop_ir` API is now named `lower_ir`.
 
 Rust handles implementation selection, physical plan validation, CUDA emission,
 and compilation. The Python API binds Tensors to a C++ runtime that owns native
@@ -45,13 +51,17 @@ sources, examples, and tests live under `python/`.
 
 | Location | Purpose |
 | --- | --- |
-| [src/analysis](src/analysis/) | Trinity IR parsing, ordered accesses, lexical scopes and dependency queries for Triton |
+| [src/analysis](src/analysis/) | ScheduledIr and shared shape, access, scope and dataflow facts |
 | [src/triton/plan.rs](src/triton/plan.rs) | Triton program and per-kernel plans |
 | [src/triton/lowering](src/triton/lowering/) | Triton storage, initialization, indexing and launch planning |
 | [src/triton/codegen](src/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
 | [src/plan](src/plan/) | Physical plan construction and validation |
 | [src/implementation/definitions](src/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
 | [src/emit](src/emit/) | CUDA scope collection, provider selection, kernel composition, execution placement and rendering |
+| [src/emit/candidate.rs](src/emit/candidate.rs) | Candidate discovery without choosing the first supported provider |
+| [src/emit/provider/quack](src/emit/provider/quack/) | Optional opaque GEMM/epilogue specifications and Python call wrappers |
+| [src/emit/provider/triton](src/emit/provider/triton/) | Typed operation adapter that reuses the existing Triton analyzer and emitter |
+| [src/emit/program](src/emit/program/) | Python program assembly, correctness checks, benchmarking, selection and execution |
 | [src/compile/cuda](src/compile/cuda/) | NVCC compilation and artifact ownership |
 | [src/python.rs](src/python.rs) | Python compiler bindings |
 | [src/native](src/native/) | Tensor execution, NVSHMEM, and CUDA Graph runtime |
@@ -90,10 +100,9 @@ skips when that harness is unavailable.
 ## Triton source generation
 
 Use `triton::compile(text, options)` or `analysis::analyze_text(text)` followed by
-`triton::lower(analysis, options)` and `ProgramPlan::emit()`. The IR's computation
+`triton::lower(analysis, options)` and `TritonPlan::emit()`. The IR's computation
 graph and loop schedule are preserved. Managed mode allocates intermediate
 tensors and returns outputs; it is enabled automatically for programs with `mloop`.
-See [the Triton emitter guide](docs/TRITON_EMITTER.md) for the analysis and plan contract.
 
 ```sh
 cargo test --locked --test batched_mla_emit -- --nocapture
@@ -104,6 +113,17 @@ These tests read the checked-in stage 14/16/20 fixtures and write `stage14.py`,
 syntax, kernel counts and the launch wrapper without importing PyTorch or Triton
 or executing GPU work. Python 3 is required. `generated_kernels/` and
 `reference_kernels/` remain ignored artifacts.
+
+## Optional Quack candidates
+
+`emit::kernel_candidates` enumerates CuTe, Triton and applicable Quack implementations.
+`emit::emit_python` composes independent candidates into a standalone module. Its
+`prepare(inputs)` checks outputs against a PyTorch reference, benchmarks passing
+candidates, and returns an executable with per-operation selections and reports.
+Quack is imported lazily; a missing optional package leaves Triton available.
+This selection path currently supports single-GPU, loop-free full-tensor operations.
+Native CUDA emission is available separately through `emit()`; its implementations
+are not yet included in the Python candidate comparison.
 
 ## Explicit plan inputs
 

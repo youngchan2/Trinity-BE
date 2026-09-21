@@ -14,6 +14,7 @@ from .compiler import (
     broadcast_implementations,
     compile,
     emit,
+    emit_python,
     gemm_implementations,
     lower_ir,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "broadcast_implementations",
     "compile",
     "emit",
+    "emit_python",
     "gemm_implementations",
     "lower_ir",
     "DistributedFailure",

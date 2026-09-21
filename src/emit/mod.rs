@@ -3,13 +3,25 @@
 use crate::{CudaSource, PhysicalPlan};
 use thiserror::Error;
 
+mod candidate;
 mod collect;
 mod combine;
 mod cuda;
 mod execution;
+mod pattern;
 mod prepare;
+mod program;
 #[expect(dead_code)]
 mod provider;
+mod request;
+
+pub use candidate::{
+    CandidateKind, CandidateRejection, KernelCandidate, OperationCandidates, kernel_candidates,
+};
+pub use program::{PythonProgram, emit_python};
+pub use provider::quack::{QuackApi, QuackSpecification};
+pub use provider::triton::TritonSpecification;
+pub use request::{KernelRequest, TensorArgument};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EmitError {

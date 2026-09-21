@@ -1,10 +1,10 @@
 //! Managed launches: scratch capacity, legal profiles and cross-kernel parameters.
-use super::super::{KernelPlan, ProgramPlan};
+use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, tuple};
 use crate::analysis::*;
 use std::collections::BTreeMap;
 
-impl ProgramPlan {
+impl TritonPlan {
     fn configurations(&self, kernel: &KernelPlan) -> Vec<BTreeMap<String, i64>> {
         let mut configs = vec![BTreeMap::new()];
         for symbol in self.owned_parameters(kernel) {
@@ -29,6 +29,7 @@ impl ProgramPlan {
         match expr {
             IndexExpr::Symbol(s)
                 if self
+                    .common
                     .metadata
                     .dimensions
                     .contains_key(self.canonical_symbol(s))
@@ -176,7 +177,7 @@ impl ProgramPlan {
         {
             let name = self.parameter(symbol);
             w.line(format!("tl.static_assert({name} > 0)"));
-            if !self.metadata.splits.contains_key(symbol) {
+            if !self.metadata.split_owners.contains_key(symbol) {
                 w.line(format!("tl.static_assert(({name} & ({name} - 1)) == 0)"));
             }
         }
@@ -193,7 +194,13 @@ impl ProgramPlan {
 
     fn allocation_expr(&self, expr: &IndexExpr) -> String {
         match expr {
-            IndexExpr::Symbol(s) if self.metadata.splits.contains_key(self.canonical_symbol(s)) => {
+            IndexExpr::Symbol(s)
+                if self
+                    .common
+                    .metadata
+                    .splits
+                    .contains_key(self.canonical_symbol(s)) =>
+            {
                 format!("capacity_{}", self.parameter(s))
             }
             IndexExpr::Apply(op, a) => format!(
@@ -263,7 +270,7 @@ impl ProgramPlan {
                 let n=self.tensor_name(*t);
                 format!("({n}.device if {n} is not None else torch.device('cuda', torch.cuda.current_device()))")
             }).unwrap_or("torch.device('cuda', torch.cuda.current_device())".into()));
-        for (symbol, (tensor, axis)) in &self.metadata.dimensions {
+        for (symbol, (tensor, axis)) in &self.common.metadata.dimensions {
             let parameter = self.parameter(symbol);
             w.line(format!(
                 "{parameter} = {}.shape[{axis}]",
@@ -276,21 +283,28 @@ impl ProgramPlan {
         }
         for tid in &external {
             let name = self.tensor_name(*tid);
-            let shape = tuple(self.metadata.shapes[tid].iter().map(|e| self.index(e)));
+            let dtype = self.tensor_dtype(*tid).python();
+            let label = self.tensor_dtype(*tid).label();
+            let shape = tuple(
+                self.common.metadata.shapes[tid]
+                    .iter()
+                    .map(|e| self.index(e)),
+            );
             if outputs.contains(tid) {
                 w.line(format!("if {name} is None:"));
                 w.indent += 1;
                 w.line(format!(
-                    "{name} = torch.empty({shape}, device={device}, dtype=torch.float16)"
+                    "{name} = torch.empty({shape}, device={device}, dtype=torch.{dtype})"
                 ));
                 w.indent -= 1;
             }
-            w.line(format!("if tuple({name}.shape) != {shape} or {name}.dtype != torch.float16 or {name}.device != {device}:"));
+            w.line(format!("if tuple({name}.shape) != {shape} or {name}.dtype != torch.{dtype} or {name}.device != {device}:"));
             w.indent += 1;
-            w.line(format!("raise ValueError('{name}: expected FP16 tensor with shape {shape} on the input device')"));
+            w.line(format!("raise ValueError('{name}: expected {label} tensor with shape {shape} on the input device')"));
             w.indent -= 1;
         }
         let dimensions = self
+            .common
             .metadata
             .dimensions
             .keys()
@@ -300,7 +314,7 @@ impl ProgramPlan {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        for (symbol, scope) in &self.metadata.splits {
+        for (symbol, scope) in &self.metadata.split_owners {
             let ki = self.analysis.scope(*scope).kernel.index();
             let p = self.parameter(symbol);
             w.line(format!(
@@ -318,13 +332,14 @@ impl ProgramPlan {
         }
         for tid in self.globals.iter().filter(|t| !external.contains(t)) {
             let shape = tuple(
-                self.metadata.shapes[tid]
+                self.common.metadata.shapes[tid]
                     .iter()
                     .map(|e| self.allocation_expr(e)),
             );
             w.line(format!(
-                "{} = torch.empty({shape}, device={device}, dtype=torch.float16)",
-                self.tensor_name(*tid)
+                "{} = torch.empty({shape}, device={device}, dtype=torch.{})",
+                self.tensor_name(*tid),
+                self.tensor_dtype(*tid).python()
             ));
         }
         for (ki, kernel) in self.kernels.iter().enumerate() {
@@ -341,9 +356,9 @@ impl ProgramPlan {
                     .access(representative)
                     .view_shape
                     .as_ref()
-                    .unwrap_or(&self.metadata.shapes[&tensor]);
+                    .unwrap_or(&self.common.metadata.shapes[&tensor]);
                 let shape: Vec<_> = view.iter().map(|e| self.allocation_expr(e)).collect();
-                let base: Vec<_> = self.metadata.shapes[&tensor]
+                let base: Vec<_> = self.common.metadata.shapes[&tensor]
                     .iter()
                     .map(|e| self.allocation_expr(e))
                     .collect();
@@ -381,7 +396,7 @@ impl ProgramPlan {
             w.line(")");
             for symbol in owned
                 .iter()
-                .filter(|s| self.metadata.splits.contains_key(*s))
+                .filter(|s| self.metadata.split_owners.contains_key(*s))
             {
                 let p = self.parameter(symbol);
                 w.line(format!("{p} = kernel_{ki}.best_config.kwargs['{p}']"));

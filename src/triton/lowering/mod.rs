@@ -6,23 +6,28 @@ mod loops;
 pub(crate) mod metadata;
 mod storage;
 
-use super::plan::ProgramPlan;
-use super::shape::{product, tile};
+use super::plan::TritonPlan;
+use super::shape::tile;
 use super::{Error, Options, invalid};
 use crate::analysis::*;
 use expression::{broadcast, expression};
 use std::collections::BTreeSet;
 
 /// Resolve shapes, storage and initialization into an immutable program plan.
-pub fn lower(analysis: ProgramAnalysis, mut options: Options) -> Result<ProgramPlan, Error> {
-    let metadata = metadata::resolve(&analysis, &mut options)?;
-    for shape in options.shapes.values() {
-        product(shape)?;
-    }
-    let accesses = analysis
-        .accesses()
+pub fn lower(analysis: ScheduledIr, mut options: Options) -> Result<TritonPlan, Error> {
+    let mut bindings = Bindings {
+        shapes: std::mem::take(&mut options.shapes),
+        symbols: std::mem::take(&mut options.symbols),
+    };
+    let tensor_metadata = TensorMetadata::collect(&analysis, &mut bindings)?;
+    let metadata = metadata::resolve(&analysis, &mut bindings, &tensor_metadata, &mut options)?;
+    let common = ProgramFacts::resolve(&analysis, &mut bindings, tensor_metadata)?;
+    options.shapes = bindings.shapes.clone();
+    options.symbols = bindings.symbols.clone();
+    let accesses = common
+        .accesses
         .iter()
-        .map(|a| tile(a, &analysis, &options))
+        .map(tile)
         .collect::<Result<Vec<_>, _>>()?;
     let expressions = analysis
         .statements()
@@ -39,8 +44,9 @@ pub fn lower(analysis: ProgramAnalysis, mut options: Options) -> Result<ProgramP
             )));
         }
     }
-    let mut plan = ProgramPlan {
+    let mut plan = TritonPlan {
         analysis,
+        common,
         options,
         kernels: Vec::new(),
         accesses,
@@ -48,16 +54,14 @@ pub fn lower(analysis: ProgramAnalysis, mut options: Options) -> Result<ProgramP
         globals: BTreeSet::new(),
         metadata,
     };
-    let mut previously_written = BTreeSet::new();
-    let mut previous_definitions: Vec<AccessId> = Vec::new();
     for ki in 0..plan.analysis.kernels().len() {
         let kernel = storage::plan_kernel(
             ki,
             &plan.analysis,
             &plan.options,
             &mut plan.globals,
-            &mut previously_written,
-            &mut previous_definitions,
+            &bindings,
+            &plan.common.kernels[ki],
         )?;
         plan.kernels.push(kernel);
     }

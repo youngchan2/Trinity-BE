@@ -1,6 +1,8 @@
 //! Triton fallback for scheduled Trinity IR, including named views and split loops.
-//! Analysis supplies the access and scope facts; lowering plans storage, indexing,
-//! and launches before codegen writes the Python module.
+//! Analysis supplies the original IR plus shared view, access and dataflow facts;
+//! Triton lowering plans padded blocks, local storage and launches before codegen
+//! writes the Python module. The Triton provider adapts supported PhysicalPlan
+//! operation requests to this pipeline, retaining typed storage and dot operands.
 mod codegen;
 mod lowering;
 mod plan;
@@ -8,16 +10,53 @@ mod shape;
 
 use std::collections::BTreeMap;
 
-use crate::analysis::{AnalysisError, ProgramAnalysis, analyze_text};
+use crate::analysis::{AnalysisError, ScheduledIr, analyze_text};
 pub use lowering::lower;
 pub use plan::{
-    InitialValue, Initialization, KernelPlan, LocalRead, ProgramMetadata, ProgramPlan, Storage,
-    TensorPlan,
+    InitialValue, Initialization, KernelPlan, LocalRead, ProgramMetadata, Storage, TensorPlan,
+    TritonPlan,
 };
 pub use shape::{AxisAccess, TileAccess};
 
+/// Storage dtype supplied by a typed frontend. Legacy TileLang defaults to FP16.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TensorDType {
+    #[default]
+    Fp16,
+    Bf16,
+    Fp32,
+}
+
+impl TensorDType {
+    pub(crate) fn python(self) -> &'static str {
+        match self {
+            Self::Fp16 => "float16",
+            Self::Bf16 => "bfloat16",
+            Self::Fp32 => "float32",
+        }
+    }
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Fp16 => "FP16",
+            Self::Bf16 => "BF16",
+            Self::Fp32 => "FP32",
+        }
+    }
+}
+
+impl From<crate::DType> for TensorDType {
+    fn from(value: crate::DType) -> Self {
+        match value {
+            crate::DType::Bf16 => Self::Bf16,
+            crate::DType::Fp32 => Self::Fp32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Options {
+    /// Per-tensor storage types. An absent entry preserves the FP16 source-IR ABI.
+    pub dtypes: BTreeMap<String, TensorDType>,
     /// Concrete tensor shapes; managed mode infers intermediate shapes from views.
     /// Emitted accesses use the kernel arguments' strides.
     pub shapes: BTreeMap<String, Vec<usize>>,
@@ -35,6 +74,8 @@ pub struct Options {
 pub enum Error {
     #[error(transparent)]
     Analysis(#[from] AnalysisError),
+    #[error(transparent)]
+    Resolution(#[from] crate::analysis::ResolveError),
     #[error("Triton lowering: {0}")]
     Invalid(String),
 }
@@ -51,6 +92,6 @@ pub fn compile(text: &str, options: Options) -> Result<String, Error> {
     Ok(plan.emit())
 }
 
-pub fn compile_analysis(analysis: ProgramAnalysis, options: Options) -> Result<String, Error> {
+pub fn compile_analysis(analysis: ScheduledIr, options: Options) -> Result<String, Error> {
     Ok(lower(analysis, options)?.emit())
 }

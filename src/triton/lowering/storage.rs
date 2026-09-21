@@ -2,18 +2,19 @@
 use super::super::plan::{InitialValue, Initialization, KernelPlan, Storage, TensorPlan};
 use super::super::shape::{loop_range, product};
 use super::super::{Error, Options, invalid};
-use super::dependencies::{covers, unowned_axes, validate_materialized_reads};
-use crate::analysis::dependencies::{common_scope, same_region, tensor_loop_dependencies};
+use super::dependencies::{unowned_axes, validate_materialized_reads};
+use crate::analysis::access::covers;
+use crate::analysis::dependencies::{common_scope, same_region};
 use crate::analysis::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn plan_kernel(
     ki: usize,
-    ir: &ProgramAnalysis,
+    ir: &ScheduledIr,
     options: &Options,
     globals: &mut BTreeSet<TensorId>,
-    previously_written: &mut BTreeSet<TensorId>,
-    previous_definitions: &mut Vec<AccessId>,
+    bindings: &Bindings,
+    facts: &KernelDataflow,
 ) -> Result<KernelPlan, Error> {
     let kernel = &ir.kernels()[ki];
     let mut parallel = Vec::new();
@@ -23,7 +24,7 @@ pub(super) fn plan_kernel(
         .enumerate()
         .filter(|(_, s)| s.kernel.index() == ki && s.loop_info.is_some())
     {
-        super::loops::validate(ir, ScopeId(si), options)?;
+        super::loops::validate(ir, ScopeId(si))?;
         if scope.kind.is_parallel() {
             parallel.push(ScopeId(si));
         }
@@ -87,32 +88,13 @@ pub(super) fn plan_kernel(
             )
         })
         .collect();
-    let dependencies = tensor_loop_dependencies(ir, kernel);
+    let dependencies = &facts.loop_dependencies;
     let mut tensors = BTreeMap::new();
-    let names: BTreeSet<_> = kernel
-        .read_writes
-        .reads
-        .union(&kernel.read_writes.writes)
-        .copied()
-        .collect();
-    for tensor in names {
-        let uses: Vec<_> = kernel
-            .accesses
-            .iter()
-            .copied()
-            .filter(|a| ir.access(*a).tensor == tensor)
-            .collect();
-        let writes: Vec<_> = uses
-            .iter()
-            .copied()
-            .filter(|a| ir.access(*a).kind == AccessKind::Write)
-            .collect();
-        let input = ir.tensor(tensor).declarations.contains(&TensorKind::Input);
-        let publish = input
-            || ir.tensor(tensor).declarations.contains(&TensorKind::Output)
-            || ir.kernels()[ki + 1..]
-                .iter()
-                .any(|k| k.read_writes.reads.contains(&tensor));
+    for (&tensor, flow) in &facts.tensors {
+        let uses = &flow.accesses;
+        let writes = &flow.writes;
+        let input = flow.input;
+        let publish = flow.live_out;
         let representative = writes.first().copied().unwrap_or(uses[0]);
         let all_same = uses
             .iter()
@@ -129,13 +111,11 @@ pub(super) fn plan_kernel(
                     writes
                         .iter()
                         .rev()
-                        .any(|w| super::access::local_read(ir, *w, *r, options).is_some())
+                        .any(|w| super::access::local_read(ir, *w, *r, bindings).is_some())
                         || (same_region(ir.access(*r), ir.access(representative))
-                            && additive_update(
-                                ir,
-                                ir.access(representative).statement,
-                                representative,
-                            ))
+                            && flow
+                                .additive_updates
+                                .contains(&ir.access(representative).statement))
                 });
         let storage = if input || writes.is_empty() {
             Storage::Global
@@ -147,7 +127,7 @@ pub(super) fn plan_kernel(
         if storage != Storage::Register || publish {
             globals.insert(tensor);
         }
-        if writes.is_empty() && !input && !previously_written.contains(&tensor) {
+        if writes.is_empty() && !input && !flow.previously_written {
             return Err(invalid(format!(
                 "{}: read before any producer",
                 ir.tensor(tensor).name
@@ -156,15 +136,15 @@ pub(super) fn plan_kernel(
         let first = ir.access(uses[0]);
         let mut initialization = None;
         if !writes.is_empty() && !input && first.kind == AccessKind::Read {
-            let value = if previously_written.contains(&tensor) {
-                InitialValue::Global
-            } else if additive_update(ir, first.statement, representative) {
-                InitialValue::Zero
-            } else {
-                return Err(invalid(format!(
-                    "{}: first read is not a defined value or additive accumulator",
-                    ir.tensor(tensor).name
-                )));
+            let value = match flow.entry_value {
+                EntryValue::EarlierKernel => InitialValue::Global,
+                EntryValue::ZeroRecurrence => InitialValue::Zero,
+                _ => {
+                    return Err(invalid(format!(
+                        "{}: first read is not a defined value or additive accumulator",
+                        ir.tensor(tensor).name
+                    )));
+                }
             };
             let family: Vec<_> = uses
                 .iter()
@@ -193,7 +173,7 @@ pub(super) fn plan_kernel(
             }
         }
         if initialization.is_none() && storage == Storage::Register {
-            let common = common_scope(ir, &uses);
+            let common = flow.common_scope;
             if common != ir.access(representative).scope {
                 // Triton needs an incoming SSA value when a value defined in
                 // a loop is used after it, even for a statically nonempty loop.
@@ -207,10 +187,10 @@ pub(super) fn plan_kernel(
         if storage == Storage::Materialized {
             validate_materialized_reads(
                 ir,
-                &uses,
+                uses,
                 representative,
                 initialization.as_ref(),
-                options,
+                bindings,
             )?;
         }
         if !input {
@@ -228,9 +208,9 @@ pub(super) fn plan_kernel(
                 Vec::new()
             };
             for read in global_reads {
-                if !previous_definitions.iter().any(|id| {
+                if !facts.previous_definitions.iter().any(|id| {
                     ir.access(*id).tensor == tensor
-                        && covers(ir, ir.access(*id), ir.access(read), options)
+                        && covers(ir, ir.access(*id), ir.access(read), bindings)
                 }) {
                     return Err(invalid(format!(
                         "{}: global read is not covered by an earlier kernel's writes",
@@ -244,7 +224,7 @@ pub(super) fn plan_kernel(
                 .iter()
                 .filter(|a| ir.access(**a).kind == AccessKind::Read)
             {
-                if !unowned_axes(ir, ir.access(*read), &parallel, options)?.is_empty() {
+                if !unowned_axes(ir, ir.access(*read), &parallel, bindings)?.is_empty() {
                     return Err(invalid(
                         "a mutated input is read across program ownership boundaries",
                     ));
@@ -258,7 +238,7 @@ pub(super) fn plan_kernel(
                 initialization
                     .as_ref()
                     .map(|i| i.scope)
-                    .unwrap_or_else(|| common_scope(ir, &uses)),
+                    .unwrap_or(flow.common_scope),
             )
         } else {
             None
@@ -277,8 +257,8 @@ pub(super) fn plan_kernel(
             }
         }
         if publish || storage == Storage::Materialized {
-            for write in &writes {
-                for axis in unowned_axes(ir, ir.access(*write), &parallel, options)? {
+            for write in writes {
+                for axis in unowned_axes(ir, ir.access(*write), &parallel, bindings)? {
                     if input || dependencies[&tensor].contains(&axis) {
                         return Err(invalid(format!(
                             "{}: global write is not proven disjoint or invariant across ploop {}",
@@ -289,13 +269,7 @@ pub(super) fn plan_kernel(
                 }
             }
         }
-        let accumulators = writes
-            .iter()
-            .filter_map(|w| {
-                let s = ir.access(*w).statement;
-                additive_update(ir, s, *w).then_some(s)
-            })
-            .collect();
+        let accumulators = flow.additive_updates.clone();
         tensors.insert(
             tensor,
             TensorPlan {
@@ -308,14 +282,6 @@ pub(super) fn plan_kernel(
             },
         );
     }
-    previously_written.extend(kernel.read_writes.writes.iter().copied());
-    previous_definitions.extend(
-        kernel
-            .accesses
-            .iter()
-            .copied()
-            .filter(|a| ir.access(*a).kind == AccessKind::Write),
-    );
     let mut register_accesses = BTreeSet::new();
     let mut local_reads = BTreeMap::new();
     for (tensor, tp) in &mut tensors {
@@ -346,7 +312,7 @@ pub(super) fn plan_kernel(
                         .iter()
                         .rev()
                         .filter(|w| ir.access(**w).kind == AccessKind::Write)
-                        .find_map(|w| super::access::local_read(ir, *w, access, options))
+                        .find_map(|w| super::access::local_read(ir, *w, access, bindings))
                 {
                     local_reads.insert(access, binding);
                 }
@@ -362,33 +328,4 @@ pub(super) fn plan_kernel(
         register_accesses,
         local_reads,
     })
-}
-
-fn additive_update(ir: &ProgramAnalysis, statement: StatementId, write: AccessId) -> bool {
-    let target = ir.access(write);
-    fn self_term(expr: &ValueExpr, ir: &ProgramAnalysis, target: &AccessInfo) -> bool {
-        match expr {
-            ValueExpr::Load(id) => {
-                let a = ir.access(*id);
-                a.tensor == target.tensor && same_region(a, target)
-            }
-            ValueExpr::Apply(op, args) if op == "*" && args.len() == 2 => {
-                (matches!(&args[0], ValueExpr::Literal(v) if v.parse::<f64>().is_ok_and(f64::is_finite))
-                    && self_term(&args[1], ir, target))
-                    || (matches!(&args[1], ValueExpr::Literal(v) if v.parse::<f64>().is_ok_and(f64::is_finite))
-                        && self_term(&args[0], ir, target))
-            }
-            _ => false,
-        }
-    }
-    let s = ir.statement(statement);
-    if s.accesses.last() != Some(&write) {
-        return false;
-    }
-    match &s.expression {
-        ValueExpr::Apply(op, args) if op == "+" && args.len() == 2 => {
-            self_term(&args[0], ir, target) || self_term(&args[1], ir, target)
-        }
-        _ => false,
-    }
 }
