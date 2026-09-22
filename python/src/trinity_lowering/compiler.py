@@ -7,6 +7,7 @@ from .metadata import freeze, manifest, requirements
 
 PhysicalPlanBuilder = _compiler.PhysicalPlanBuilder
 PhysicalPlan = _compiler.PhysicalPlan
+TritonProgram = _compiler.TritonProgram
 Implementation = _compiler.Implementation
 CompileConfig = _compiler.CompileConfig
 CompileError = _compiler.CompileError
@@ -20,8 +21,18 @@ lower_ir = _compiler.lower_ir
 
 
 def emit_python(plan):
-    """Emit a standalone candidate-selection module for a loop-free PhysicalPlan."""
+    """Emit candidate selection or the scheduled Triton fallback, preserving loops."""
     return _compiler.emit_python(plan)
+
+
+def emit_triton(plan, **options):
+    """Emit Triton kernels and forward() directly from a common PhysicalPlan."""
+    return _compiler.emit_triton(plan, json.dumps(options))
+
+
+def lower_triton(text, **options):
+    """IR -> common PhysicalPlan -> Triton provider; returns source and physical_plan."""
+    return _compiler.lower_triton(text, json.dumps(options))
 
 
 class CudaSource:

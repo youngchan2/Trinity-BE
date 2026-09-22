@@ -1,5 +1,5 @@
 //! Tile coordinates, pointer offsets, address masks and global load/store output.
-use super::super::shape::{constant, loop_range};
+use super::super::shape::constant;
 use super::super::{KernelPlan, TritonPlan};
 use super::context::{CodegenContext, EmittedValue};
 use crate::analysis::*;
@@ -15,45 +15,24 @@ impl TritonPlan {
                 self.index(&args[1])
             ),
             IndexExpr::Symbol(s)
-                if self.options.managed
-                    && (self
-                        .common
+                if (self
+                    .common
+                    .metadata
+                    .dimensions
+                    .contains_key(self.canonical_symbol(s))
+                    || self
                         .metadata
-                        .dimensions
-                        .contains_key(self.canonical_symbol(s))
-                        || self
-                            .metadata
-                            .candidates
-                            .contains_key(self.canonical_symbol(s))) =>
+                        .candidates
+                        .contains_key(self.canonical_symbol(s))) =>
             {
                 self.parameter(s)
-            }
-            IndexExpr::Symbol(s) if !self.options.managed => {
-                if let Some((i, _)) =
-                    self.analysis
-                        .scopes()
-                        .iter()
-                        .enumerate()
-                        .find(|(_, scope)| {
-                            scope
-                                .loop_info
-                                .as_ref()
-                                .is_some_and(|info| info.step == IndexExpr::Symbol(s.clone()))
-                        })
-                {
-                    self.block(ScopeId(i))
-                } else {
-                    constant(expr, &self.options).unwrap().to_string()
-                }
             }
             _ => constant(expr, &self.options).unwrap().to_string(),
         }
     }
 
     fn width(&self, dim: &IndexDim, fallback: usize) -> String {
-        if self.options.managed
-            && let IndexDim::Tile { width, .. } | IndexDim::ConstTile { width, .. } = dim
-        {
+        if let IndexDim::Tile { width, .. } | IndexDim::ConstTile { width, .. } = dim {
             let value = self.index(width);
             return if self.power_of_two_width(width) {
                 value
@@ -61,17 +40,7 @@ impl TritonPlan {
                 format!("triton.next_power_of_2({value})")
             };
         }
-        match dim {
-            IndexDim::Tile {
-                start: IndexExpr::LoopVar(id),
-                width,
-            } if *width == self.analysis.scope(*id).loop_info.as_ref().unwrap().step
-                && !matches!(width, IndexExpr::Integer(n) if !(*n as usize).is_power_of_two()) =>
-            {
-                self.block(*id)
-            }
-            _ => fallback.to_string(),
-        }
+        fallback.to_string()
     }
 
     fn power_of_two_width(&self, width: &IndexExpr) -> bool {
@@ -98,8 +67,7 @@ impl TritonPlan {
             .zip(&self.accesses[id.index()].shape)
             .enumerate()
             .map(|(axis, (dim, size))| {
-                if self.options.managed
-                    && matches!(dim, IndexDim::FullTile)
+                if matches!(dim, IndexDim::FullTile)
                     && self
                         .analysis
                         .access(id)
@@ -141,95 +109,25 @@ impl TritonPlan {
     }
 
     fn mask(&self, id: AccessId, w: &mut CodegenContext) -> String {
-        if self.dynamic_access(id) {
-            let rank = self.analysis.access(id).index.len();
-            // Conditions carry their own logical axis; do not squeeze elem axes.
-            let conditions: Vec<_> = (0..rank)
-                .filter_map(|axis| {
-                    self.dynamic_condition(id, axis).map(|s| {
-                        if rank > 1 {
-                            format!("({s})[{}]", Self::slice(rank, axis))
-                        } else {
-                            s
-                        }
-                    })
+        let rank = self.analysis.access(id).index.len();
+        // Conditions carry their own logical axis; do not squeeze elem axes.
+        let conditions: Vec<_> = (0..rank)
+            .filter_map(|axis| {
+                self.dynamic_condition(id, axis).map(|s| {
+                    if rank > 1 {
+                        format!("({s})[{}]", Self::slice(rank, axis))
+                    } else {
+                        s
+                    }
                 })
-                .collect();
-            if conditions.is_empty() {
-                return "True".into();
-            }
-            let name = format!("mask_{}", w.mask);
-            w.mask += 1;
-            w.line(format!("{name} = {}", conditions.join(" & ")));
-            return name;
-        }
-        let access = self.analysis.access(id);
-        let tile = &self.accesses[id.index()];
-        let mut masks = Vec::new();
-        for (axis, dim) in access.index.iter().enumerate() {
-            let info = &tile.axes[axis];
-            if matches!(dim, IndexDim::FullTile) && info.extent.is_power_of_two() {
-                continue;
-            }
-            if matches!(dim, IndexDim::ConstTile { .. })
-                && info.width.is_power_of_two()
-                && constant(&info.start, &self.options)
-                    .is_ok_and(|start| start >= 0 && start as usize + info.width <= info.extent)
-            {
-                continue;
-            }
-            let coordinate = if let IndexDim::Tile {
-                start: IndexExpr::LoopVar(scope),
-                ..
-            } = dim
-            {
-                let width = self.width(dim, tile.shape[axis]);
-                let suffix = if width == self.block(*scope) {
-                    String::new()
-                } else {
-                    format!("_{width}")
-                };
-                let name = format!("{}_indices{suffix}", self.loop_name(*scope));
-                if w.indices.insert(name.clone()) {
-                    w.line(format!("{name} = {}", self.coordinate(id, axis)));
-                }
-                name
-            } else if let IndexDim::Elem(IndexExpr::LoopVar(scope)) = dim {
-                let name = format!("elem_{}_indices", self.loop_name(*scope));
-                if w.indices.insert(name.clone()) {
-                    w.line(format!("{name} = {}", self.coordinate(id, axis)));
-                }
-                name
-            } else {
-                format!("({})", self.coordinate(id, axis))
-            };
-            let end = if self.padded(id) {
-                info.loop_end
-                    .as_ref()
-                    .map(|e| constant(e, &self.options).unwrap() as usize)
-                    .unwrap_or(info.extent)
-                    .min(info.extent)
-            } else {
-                info.extent
-            };
-            let mut condition = format!("({coordinate} < {end})");
-            if !info.width.is_power_of_two() {
-                condition.push_str(&format!(
-                    " & (tl.arange(0, {}) < {})",
-                    tile.shape[axis], info.width
-                ));
-            }
-            if access.index.len() > 1 {
-                condition = format!("({condition})[{}]", Self::slice(access.index.len(), axis));
-            }
-            masks.push(condition);
-        }
-        if masks.is_empty() {
+            })
+            .collect();
+        if conditions.is_empty() {
             return "True".into();
         }
         let name = format!("mask_{}", w.mask);
         w.mask += 1;
-        w.line(format!("{name} = {}", masks.join(" & ")));
+        w.line(format!("{name} = {}", conditions.join(" & ")));
         name
     }
 
@@ -248,8 +146,7 @@ impl TritonPlan {
             .iter()
             .map(|a| a.extent)
             .eq(kernel_shape.iter().copied());
-        if self.options.managed
-            && !same_shape
+        if !same_shape
             && (0..rank).any(|axis| {
                 let singleton = access
                     .view_shape
@@ -328,70 +225,9 @@ impl TritonPlan {
         (name, mask)
     }
 
-    fn padded(&self, id: AccessId) -> bool {
-        (0..self.analysis.access(id).index.len()).any(|axis| self.axis_padded(id, axis))
-    }
-
-    fn axis_padded(&self, id: AccessId, axis: usize) -> bool {
-        if self.dynamic_access(id) {
-            return self.dynamic_condition(id, axis).is_some();
-        }
-        let access = self.analysis.access(id);
-        let tile = &self.accesses[id.index()];
-        let dim = &access.index[axis];
-        let info = &tile.axes[axis];
-        let width = if let IndexDim::Tile {
-            start: IndexExpr::LoopVar(scope),
-            width,
-        } = dim
-        {
-            if self.tunable(*scope)
-                && *width == self.analysis.scope(*scope).loop_info.as_ref().unwrap().step
-            {
-                128.min(loop_range(&self.analysis, *scope, &self.options).unwrap().1 as usize)
-                    .next_power_of_two()
-            } else {
-                info.width
-            }
-        } else {
-            info.width
-        };
-        !info.width.is_power_of_two()
-            || !info.extent.is_multiple_of(width)
-            || info.loop_end.as_ref().is_some_and(|e| {
-                !(constant(e, &self.options).unwrap() as usize).is_multiple_of(width)
-            })
-    }
-
     pub(super) fn validity(&self, id: AccessId) -> Vec<Option<String>> {
-        if self.dynamic_access(id) {
-            return (0..self.accesses[id.index()].axes.len())
-                .map(|axis| self.dynamic_condition(id, axis))
-                .collect();
-        }
-        let tile = &self.accesses[id.index()];
-        tile.axes
-            .iter()
-            .enumerate()
-            .map(|(axis, info)| {
-                if !self.axis_padded(id, axis) {
-                    return None;
-                }
-                let end = info
-                    .loop_end
-                    .as_ref()
-                    .map(|e| constant(e, &self.options).unwrap() as usize)
-                    .unwrap_or(info.extent)
-                    .min(info.extent);
-                let mut predicate = format!("({} < {end})", self.coordinate(id, axis));
-                if !info.width.is_power_of_two() {
-                    predicate.push_str(&format!(
-                        " & (tl.arange(0, {}) < {})",
-                        tile.shape[axis], info.width
-                    ));
-                }
-                Some(predicate)
-            })
+        (0..self.accesses[id.index()].axes.len())
+            .map(|axis| self.dynamic_condition(id, axis))
             .collect()
     }
 
@@ -402,6 +238,9 @@ impl TritonPlan {
         w: &mut CodegenContext,
     ) -> EmittedValue {
         let access = self.analysis.access(id);
+        if w.pending_stores.contains(&access.tensor) {
+            w.synchronize_stores();
+        }
         let (offset, mask) = self.address(id, kernel, w);
         let code = w.temporary(format!(
             "tl.load({}_ptr + {offset}, mask={mask}, other=0.0).to(tl.float32)",
@@ -433,15 +272,7 @@ impl TritonPlan {
             self.tensor_name(self.analysis.access(id).tensor),
             self.tensor_dtype(self.analysis.access(id).tensor).python()
         ));
-    }
-
-    fn dynamic_access(&self, id: AccessId) -> bool {
-        self.options.managed
-            || self.accesses[id.index()].axes.iter().any(|a| {
-                a.loop_end
-                    .as_ref()
-                    .is_some_and(|e| !e.loop_dependencies().is_empty())
-            })
+        w.pending_stores.insert(self.analysis.access(id).tensor);
     }
 
     fn dynamic_condition(&self, id: AccessId, axis: usize) -> Option<String> {

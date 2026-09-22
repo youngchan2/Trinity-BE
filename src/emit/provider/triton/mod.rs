@@ -5,8 +5,10 @@ use crate::triton::TritonPlan;
 use crate::{CudaTargetCapability, TargetCapability};
 
 mod adapter;
+mod program;
+pub use program::TritonProgram;
 
-pub(in crate::emit) struct TritonKernelProvider;
+pub struct TritonKernelProvider;
 
 #[derive(Debug, Clone)]
 pub struct TritonSpecification {

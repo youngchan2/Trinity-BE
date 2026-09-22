@@ -22,17 +22,11 @@ impl TritonPlan {
                 params.push(format!("{name}_stride{axis}: tl.constexpr"));
             }
         }
-        if self.options.managed {
-            params.extend(
-                self.parameters(kernel)
-                    .iter()
-                    .map(|s| format!("{}: tl.constexpr", self.parameter(s))),
-            );
-        } else {
-            for id in self.loops(kernel) {
-                params.push(format!("{}: tl.constexpr", self.block(id)));
-            }
-        }
+        params.extend(
+            self.parameters(kernel)
+                .iter()
+                .map(|s| format!("{}: tl.constexpr", self.parameter(s))),
+        );
         for (i, param) in params.iter().enumerate() {
             w.line(format!(
                 "{param}{}",
@@ -44,11 +38,8 @@ impl TritonPlan {
         w.indent = 1;
         w.temp = 0;
         w.offset = 0;
-        w.indices.clear();
-        w.loads.clear();
-        if self.options.managed {
-            self.managed_assertions(kernel, w);
-        }
+        w.pending_stores.clear();
+        self.launch_assertions(kernel, w);
         if self.analysis.scope(kernel.root_scope).children.is_empty() {
             w.line("pass");
         }
@@ -85,37 +76,7 @@ impl TritonPlan {
     }
 
     pub(super) fn block(&self, id: ScopeId) -> String {
-        if self.options.managed {
-            return self.index(&self.analysis.scope(id).loop_info.as_ref().unwrap().step);
-        }
-        format!("BLOCK_{}", self.loop_name(id).to_uppercase())
-    }
-
-    pub(super) fn loops(&self, kernel: &KernelPlan) -> Vec<ScopeId> {
-        let mut seen = BTreeSet::new();
-        self.analysis
-            .scopes()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let id = ScopeId(i);
-                if s.kernel == self.analysis.scope(kernel.root_scope).kernel
-                    && s.loop_info.is_some()
-                    && seen.insert(self.block(id))
-                {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub(super) fn tunable(&self, id: ScopeId) -> bool {
-        matches!(
-            self.analysis.scope(id).loop_info.as_ref().unwrap().step,
-            IndexExpr::Symbol(_)
-        )
+        self.index(&self.analysis.scope(id).loop_info.as_ref().unwrap().step)
     }
 
     pub(super) fn kernel_shape(&self, kernel: &KernelPlan, tensor: TensorId) -> Vec<usize> {
@@ -167,10 +128,30 @@ impl TritonPlan {
 
     fn scope(&self, id: ScopeId, kernel: &KernelPlan, w: &mut CodegenContext) {
         let scope = self.analysis.scope(id);
-        let previous_indices = w.indices.clone();
+        let global_reads: BTreeSet<_> = if scope.kind == ScopeKind::SequentialLoop {
+            self.analysis
+                .accesses()
+                .iter()
+                .enumerate()
+                .filter(|(index, a)| {
+                    a.kind == AccessKind::Read
+                        && self.analysis.is_within(a.scope, id)
+                        && !kernel.register_accesses.contains(&AccessId(*index))
+                })
+                .map(|(_, a)| a.tensor)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         if scope.kind == ScopeKind::SequentialLoop && scope.children.is_empty() {
             w.line("# Skipped empty sloop with dummy body");
             return;
+        }
+        // Hoist publication of preceding stores out of a consuming loop. A
+        // global load can change lane layout, so program order alone is not a
+        // cross-warp synchronization guarantee, even within one CTA.
+        if !w.pending_stores.is_disjoint(&global_reads) {
+            w.synchronize_stores();
         }
         if scope.kind.is_parallel() {
             self.initializations(id, kernel, true, w);
@@ -196,8 +177,6 @@ impl TritonPlan {
                 ));
                 w.line(format!("for {variable} in range({start}, {end}, {block}):"));
                 w.indent += 1;
-                w.indices.clear();
-                w.loads.clear();
                 if scope.children.is_empty() {
                     w.line("pass");
                 }
@@ -223,24 +202,19 @@ impl TritonPlan {
                     }
                     if kernel.register_accesses.contains(&access) {
                         let target_shape = self.tile_shape(access);
-                        if self.options.managed
-                            || self.expressions[statement.index()].shape
-                                != self.accesses[access.index()].shape
-                        {
+                        // Compare emitted shapes, including tunable dimensions.
+                        // Buffer ownership does not require a value broadcast.
+                        if value.shape != target_shape {
                             code = format!("tl.broadcast_to({code}, {})", tuple(target_shape));
                         }
-                        if self.options.managed
-                            && !kernel.tensors[&tensor].accumulators.contains(&statement)
-                        {
-                            code =
-                                format!("({code}).to(tl.{})", self.tensor_dtype(tensor).python());
-                        }
+                        // A register assignment is not a storage precision boundary.
+                        // Keep pointwise/reduction/accumulator opmath in FP32; round
+                        // at explicit casts, GEMM inputs and global stores instead.
+                        code = format!("({code}).to(tl.float32)");
                         w.line(format!("{} = {code}", self.tensor_name(tensor)));
                     } else {
                         self.store(access, &code, kernel, w);
                     }
-                    w.loads
-                        .retain(|key, _| !key.starts_with(&format!("{}:", tensor.index())));
                 }
             }
         }
@@ -251,9 +225,11 @@ impl TritonPlan {
             }
         }
         if scope.kind == ScopeKind::SequentialLoop {
+            // A later iteration can read values written by this iteration.
+            if !w.pending_stores.is_disjoint(&global_reads) {
+                w.synchronize_stores();
+            }
             w.indent -= 1;
-            w.indices = previous_indices;
-            w.loads.clear();
         }
     }
 }

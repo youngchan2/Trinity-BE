@@ -21,6 +21,15 @@ pub use candidate::{
 pub use program::{PythonProgram, emit_python};
 pub use provider::quack::{QuackApi, QuackSpecification};
 pub use provider::triton::TritonSpecification;
+pub use provider::triton::{TritonKernelProvider, TritonProgram};
+
+/// Emit an ordered single-GPU program through the Triton fallback provider.
+pub fn emit_triton(
+    plan: &PhysicalPlan,
+    options: crate::triton::Options,
+) -> Result<String, crate::triton::Error> {
+    Ok(TritonKernelProvider.lower_program(plan, options)?.emit())
+}
 pub use request::{KernelRequest, TensorArgument};
 
 #[derive(Debug, Error, PartialEq, Eq)]

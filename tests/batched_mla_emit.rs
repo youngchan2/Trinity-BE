@@ -8,7 +8,6 @@ fn emit_stage(stage: usize, kernel_count: usize) {
     let fixtures = root.join("tests/fixtures/batched_mla");
     let input = fixtures.join(format!("batched_mla_postprocessed_stage{stage}.txt"));
     let mut options = Options {
-        managed: true,
         symbols: [
             ("tile_b".into(), 1),
             ("tile_m".into(), 32),

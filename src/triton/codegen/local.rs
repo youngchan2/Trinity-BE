@@ -56,10 +56,9 @@ impl TritonPlan {
         }
         let valid = self.validity(id);
         let mut zero_invalid = false;
-        if self.options.managed
-            && !kernel.tensors[&access.tensor]
-                .accumulators
-                .contains(&access.statement)
+        if !kernel.tensors[&access.tensor]
+            .accumulators
+            .contains(&access.statement)
         {
             let rank = valid.len();
             let predicates: Vec<_> = valid
@@ -80,9 +79,7 @@ impl TritonPlan {
                 zero_invalid = true;
             }
         }
-        if self.options.managed {
-            code = format!("({code}).to(tl.float32)");
-        }
+        code = format!("({code}).to(tl.float32)");
         EmittedValue {
             code,
             shape: self.tile_shape(id),

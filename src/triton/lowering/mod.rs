@@ -1,20 +1,40 @@
 //! Resolve one selected program without changing its loop or kernel schedule.
-mod access;
-mod dependencies;
 mod expression;
 mod loops;
 pub(crate) mod metadata;
+pub(crate) mod precision;
 mod storage;
+mod tuning;
 
 use super::plan::TritonPlan;
 use super::shape::tile;
 use super::{Error, Options, invalid};
 use crate::analysis::*;
 use expression::{broadcast, expression};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// Resolve shapes, storage and initialization into an immutable program plan.
-pub fn lower(analysis: ScheduledIr, mut options: Options) -> Result<TritonPlan, Error> {
+pub fn lower(analysis: ScheduledIr, options: Options) -> Result<TritonPlan, Error> {
+    Ok(crate::emit::TritonKernelProvider
+        .lower_source(analysis, options)?
+        .into_plan())
+}
+
+pub(crate) fn lower_projected(
+    analysis: ScheduledIr,
+    options: Options,
+    storage_contracts: BTreeMap<TensorId, crate::Storage>,
+) -> Result<TritonPlan, Error> {
+    let mut plan = lower_impl(analysis, options, storage_contracts)?;
+    tuning::resolve(&mut plan)?;
+    Ok(plan)
+}
+
+fn lower_impl(
+    analysis: ScheduledIr,
+    mut options: Options,
+    storage_contracts: BTreeMap<TensorId, crate::Storage>,
+) -> Result<TritonPlan, Error> {
     let mut bindings = Bindings {
         shapes: std::mem::take(&mut options.shapes),
         symbols: std::mem::take(&mut options.symbols),
@@ -22,6 +42,12 @@ pub fn lower(analysis: ScheduledIr, mut options: Options) -> Result<TritonPlan, 
     let tensor_metadata = TensorMetadata::collect(&analysis, &mut bindings)?;
     let metadata = metadata::resolve(&analysis, &mut bindings, &tensor_metadata, &mut options)?;
     let common = ProgramFacts::resolve(&analysis, &mut bindings, tensor_metadata)?;
+    let allocation = crate::analysis::storage::for_values(
+        &analysis,
+        &bindings,
+        &common.kernels,
+        &storage_contracts,
+    )?;
     options.shapes = bindings.shapes.clone();
     options.symbols = bindings.symbols.clone();
     let accesses = common
@@ -44,6 +70,7 @@ pub fn lower(analysis: ScheduledIr, mut options: Options) -> Result<TritonPlan, 
             )));
         }
     }
+    let dtypes = precision::resolve(&analysis, &expressions, &options);
     let mut plan = TritonPlan {
         analysis,
         common,
@@ -51,17 +78,19 @@ pub fn lower(analysis: ScheduledIr, mut options: Options) -> Result<TritonPlan, 
         kernels: Vec::new(),
         accesses,
         expressions,
-        globals: BTreeSet::new(),
+        dtypes,
+        globals: allocation.globals,
+        storage_contracts,
         metadata,
+        tuning: Vec::new(),
     };
     for ki in 0..plan.analysis.kernels().len() {
         let kernel = storage::plan_kernel(
             ki,
             &plan.analysis,
             &plan.options,
-            &mut plan.globals,
-            &bindings,
             &plan.common.kernels[ki],
+            &allocation.kernels[ki],
         )?;
         plan.kernels.push(kernel);
     }

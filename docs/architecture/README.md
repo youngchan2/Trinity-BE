@@ -2,6 +2,12 @@
 
 Trinity Lowering Repository는 선택된 연산 구현 및 실행 순서를 이용해 CUDA source와 컴파일 아티팩트를 생성합니다. 이 문서는 공개 인터페이스와 세 단계의 책임 경계를 안내합니다.
 
+아래 공개 인터페이스는 Native CUDA 경로입니다. 공통 PhysicalPlan을 소비하는
+Triton source/launch 경로와 제한된 Triton/Quack 후보 비교 경로도 별도로 존재합니다.
+통합된 compile·benchmark·선택 경로가 모두 완성된 것은 아닙니다.
+현재 작업 트리의 공통 계약은 [Planning](planning.md), provider별 진입점과 지원 차이는
+[Triton provider](triton-provider.md#selection-boundary-and-current-limits)를 따릅니다.
+
 ![](../images/trinity-lowering-architecture.svg)
 
 ## 인터페이스
@@ -43,7 +49,7 @@ Text IR 또는 `PhysicalPlanBuilder` 입력을 받아, Tensor Binding, 연산, L
 
 ### Compile
 
-[Compile](compile.md)
+[Compile 소스](../../src/compile/mod.rs)
 
 `CudaSource`를 공유 라이브러리와 메타데이터를 포함한 `CudaArtifact`로 변환해, 실제 실행 가능한 형태로 변환합니다.
 
@@ -55,18 +61,17 @@ Text IR 또는 `PhysicalPlanBuilder` 입력을 받아, Tensor Binding, 연산, L
 | Plan 구성·확정              | [plan/builder.rs](../../src/plan/builder.rs)                                                                                                         |
 | 공통 emit·검증 진입점       | [emit/mod.rs](../../src/emit/mod.rs)                                                                                                                 |
 | 준비 결과 trait·플랫폼 분기 | [emit/prepare.rs](../../src/emit/prepare.rs)                                                                                                         |
-| 내부 소스 variant           | [emit/source.rs](../../src/emit/source.rs)                                                                                                           |
-| CUDA 준비·자원 확정         | [emit/cuda/prepare.rs](../../src/emit/cuda/prepare.rs), [emit/cuda/requirements.rs](../../src/emit/cuda/requirements.rs)                             |
-| Task·실행 domain            | [emit/cuda/domain.rs](../../src/emit/cuda/domain.rs)                                                                                                 |
-| Body·Phase 모델             | [emit/cuda/body/mod.rs](../../src/emit/cuda/body/mod.rs)                                                                                             |
-| Symbol·Code·CUDA 토큰화     | [emit/cuda/body/code.rs](../../src/emit/cuda/body/code.rs)                                                                                           |
-| Body 목록 구성·재사용       | [emit/cuda/body/program.rs](../../src/emit/cuda/body/program.rs)                                                                                     |
+| Scheduled IR → 공통 Plan    | [plan/scheduled.rs](../../src/plan/scheduled.rs) |
+| 공통 접근·storage 분석      | [analysis/physical.rs](../../src/analysis/physical.rs), [analysis/storage/mod.rs](../../src/analysis/storage/mod.rs) |
+| 소스·자원 반환 타입         | [compile/source.rs](../../src/compile/source.rs) |
+| Native 구현 수집·자원 계약  | [emit/collect.rs](../../src/emit/collect.rs), [emit/provider/interface.rs](../../src/emit/provider/interface.rs) |
+| Native 본문 결합            | [emit/combine/mod.rs](../../src/emit/combine/mod.rs) |
+| Symbol·Code 표현            | [emit/provider/code.rs](../../src/emit/provider/code.rs) |
 | 실행 방식 선택·배치 연결    | [emit/cuda/execution.rs](../../src/emit/cuda/execution.rs)                                                                                           |
 | 논리 검증                   | [emit/cuda/validation.rs](../../src/emit/cuda/validation.rs)                                                                                         |
-| 단일 Body 생성·backend 계약 | [emit/cuda/body/builder.rs](../../src/emit/cuda/body/builder.rs), [emit/cuda/backend.rs](../../src/emit/cuda/backend.rs)                             |
-| Streamed grid·launch        | [emit/cuda/streamed/mod.rs](../../src/emit/cuda/streamed/mod.rs)                                                                                     |
-| Persistent 실행·workspace   | [emit/cuda/persistent/mod.rs](../../src/emit/cuda/persistent/mod.rs)                                                                                 |
-| Persistent 접근·의존성      | [emit/cuda/persistent/access.rs](../../src/emit/cuda/persistent/access.rs), [emit/cuda/persistent/graph.rs](../../src/emit/cuda/persistent/graph.rs) |
+| Provider 계약               | [emit/provider.rs](../../src/emit/provider.rs) |
+| Triton program provider     | [emit/provider/triton/program.rs](../../src/emit/provider/triton/program.rs) |
+| Triton lowering·codegen     | [triton/lowering/mod.rs](../../src/triton/lowering/mod.rs), [triton/codegen/mod.rs](../../src/triton/codegen/mod.rs) |
+| 후보 발견·Python 실행 구성  | [emit/candidate.rs](../../src/emit/candidate.rs), [emit/program/mod.rs](../../src/emit/program/mod.rs) |
 | CUDA 소스·Body 렌더링       | [emit/cuda/render.rs](../../src/emit/cuda/render.rs)                                                                                                 |
-| 실행 방식별 렌더링          | [emit/cuda/streamed/render.rs](../../src/emit/cuda/streamed/render.rs), [emit/cuda/persistent/render.rs](../../src/emit/cuda/persistent/render.rs)   |
 | compile/link와 artifact     | [compile/cuda/mod.rs](../../src/compile/cuda/mod.rs), [compile/cuda/artifact.rs](../../src/compile/cuda/artifact.rs)                                 |

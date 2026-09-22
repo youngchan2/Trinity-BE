@@ -75,6 +75,7 @@ def test_reader_infers_register_values_instead_of_global_scratch():
     assert storage[metadata["inputs"][0]["value"]] == "external"
     assert storage[metadata["outputs"][0]["value"]] == "external"
     assert len(tl.emit(plan).requirements.buffers) == 2
+    assert "T_ptr" not in tl.emit_triton(plan, autotune={"max_configs": 1})
 
 
 @pytest.mark.gpu

@@ -34,9 +34,6 @@ pub(crate) fn tile(access: &ResolvedAccess) -> Result<TileAccess, Error> {
 pub(crate) fn constant(expr: &IndexExpr, options: &Options) -> Result<i64, Error> {
     Ok(crate::analysis::scalar::constant(expr, &options.symbols)?)
 }
-pub(crate) fn positive(expr: &IndexExpr, options: &Options) -> Result<usize, Error> {
-    Ok(crate::analysis::scalar::positive(expr, &options.symbols)?)
-}
 pub(crate) fn loop_range(
     ir: &ScheduledIr,
     id: ScopeId,

@@ -21,7 +21,7 @@ def _load_candidate(candidate, sources):
 
 
 def _dtype(name):
-    return {'bf16': torch.bfloat16, 'fp32': torch.float32}[name]
+    return {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}[name]
 
 
 def _bind(manifest, inputs):
@@ -110,7 +110,7 @@ def _prepare(manifest, sources, inputs, *, providers=None, rtol=1e-2, atol=1e-2,
             for operation in manifest['operations']:
                 output = operation['output']
                 expected = torch.empty_like(values[output])
-                expected.copy_(torch.as_tensor(_reference(operation['expression'], values), device=device, dtype=torch.float32))
+                expected.view(operation['output_view_shape']).copy_(torch.as_tensor(_reference(operation['expression'], values), device=device, dtype=torch.float32))
                 candidates = [c for c in operation['candidates'] if providers is None or c['provider'] in providers]
                 compare = lambda actual, reference: torch.testing.assert_close(actual, reference, rtol=rtol, atol=atol, equal_nan=False)
                 # Only this operation's memory boundary belongs in its trial.

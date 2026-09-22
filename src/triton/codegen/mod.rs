@@ -16,9 +16,7 @@ impl TritonPlan {
     pub fn emit(&self) -> String {
         let mut w = CodegenContext::default();
         w.line("import triton\nimport triton.language as tl\nimport torch\n");
-        if self.options.managed {
-            self.managed_prelude(&mut w);
-        }
+        self.launch_prelude(&mut w);
         for (ki, kernel) in self.kernels.iter().enumerate() {
             self.kernel(ki, kernel, &mut w);
         }

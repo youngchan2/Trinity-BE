@@ -5,7 +5,10 @@ import torch
 def _reference(expression, values):
     op = expression['op']
     if op == 'load':
-        return values[expression['value']].float()
+        value = values[expression['value']]
+        if expression.get('view_shape') is not None:
+            value = value.view(expression['view_shape'])
+        return value.float()
     if op == 'constant':
         return expression['value']
     args = [_reference(a, values) for a in expression['args']]

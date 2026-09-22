@@ -1,5 +1,6 @@
 //! Mutable source buffers, names and temporary values for one emission.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::analysis::TensorId;
+use std::collections::BTreeSet;
 
 pub(super) fn tuple(values: impl IntoIterator<Item = impl ToString>) -> String {
     let values: Vec<_> = values.into_iter().map(|v| v.to_string()).collect();
@@ -17,10 +18,14 @@ pub(super) struct CodegenContext {
     pub(super) temp: usize,
     pub(super) offset: usize,
     pub(super) mask: usize,
-    pub(super) indices: BTreeSet<String>,
-    pub(super) loads: BTreeMap<String, EmittedValue>,
+    /// Global stores whose values have not yet been published to other warps.
+    pub(super) pending_stores: BTreeSet<TensorId>,
 }
 impl CodegenContext {
+    pub(super) fn synchronize_stores(&mut self) {
+        self.line("tl.debug_barrier()");
+        self.pending_stores.clear();
+    }
     pub(super) fn line(&mut self, text: impl AsRef<str>) {
         if !text.as_ref().is_empty() {
             self.source.push_str(&"    ".repeat(self.indent));

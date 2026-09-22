@@ -57,14 +57,19 @@ fn reserved(name: &str) -> bool {
     .any(|prefix| name.starts_with(prefix))
 }
 
-pub(super) fn resolve(
+pub(crate) fn resolve(
     ir: &ScheduledIr,
     bindings: &mut Bindings,
     common: &TensorMetadata,
     options: &mut Options,
 ) -> Result<ProgramMetadata, Error> {
-    options.managed |= ir.scopes().iter().any(|s| s.kind == ScopeKind::SplitLoop);
-    let mut result = ProgramMetadata::default();
+    let mut result = ProgramMetadata {
+        output_order: ir
+            .declared_tensors(TensorKind::Output)
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
     let mut names = BTreeSet::new();
     let loop_names: BTreeSet<_> = ir
         .scopes()
@@ -89,11 +94,22 @@ pub(super) fn resolve(
                     .clamp(1, 16);
                 let default = if default < 16 { 1 } else { 16 };
                 bindings.symbols.entry(s.clone()).or_insert(default);
-                let values = options
-                    .tuning
-                    .get(s)
-                    .cloned()
-                    .unwrap_or_else(|| vec![bindings.symbols[s]]);
+                let values = options.tuning.get(s).cloned().unwrap_or_else(|| {
+                    let baseline = bindings.symbols[s];
+                    let mut values = vec![baseline];
+                    let extent = constant(&info.end, &bindings.symbols)
+                        .ok()
+                        .zip(constant(&info.start, &bindings.symbols).ok())
+                        .map(|(end, start)| {
+                            ((end - start).max(1) as u64).next_power_of_two() as i64
+                        });
+                    for value in [16, 32, 64, 128, 256] {
+                        if value != baseline && extent.is_none_or(|n| value <= n) {
+                            values.push(value);
+                        }
+                    }
+                    values
+                });
                 result.candidates.insert(s.clone(), values);
             }
             if scope.kind == ScopeKind::SplitLoop

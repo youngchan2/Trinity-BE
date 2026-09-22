@@ -24,20 +24,10 @@ impl TritonPlan {
                 zero_invalid: false,
             },
             ExprKind::Load(id) => {
-                let a = self.analysis.access(*id);
                 if kernel.register_accesses.contains(id) {
                     return self.local_load(*id, kernel, w);
                 }
-                if self.options.managed {
-                    return self.load(*id, kernel, w);
-                }
-                let key = format!("{}:{:?}:{:?}", a.tensor.index(), a.index, a.view_shape);
-                if let Some(value) = w.loads.get(&key) {
-                    return value.clone();
-                }
-                let value = self.load(*id, kernel, w);
-                w.loads.insert(key, value.clone());
-                value
+                self.load(*id, kernel, w)
             }
             ExprKind::Unary(op, child) => {
                 let a = self.expression(child, kernel, w);
@@ -47,7 +37,7 @@ impl TritonPlan {
                     format!("({}).to(tl.float32)", a.code)
                 };
                 let code = match op.as_str() {
-                    "sqr" => format!("({0} * {0})", a.code),
+                    "sqr" => format!("({cast} * {cast})"),
                     "abs" => format!("tl.abs({})", a.code),
                     "erf" => format!("tl.math.erf({cast})"),
                     _ => format!("tl.{op}({cast})"),
@@ -167,17 +157,14 @@ impl TritonPlan {
                 let small = [&a.shape[rank - 2], &a.shape[rank - 1], &b.shape[rank - 1]]
                     .iter()
                     .any(|s| s.parse::<usize>().is_ok_and(|v| v < 16));
-                // Explicit operand casts from typed frontends select dot precision.
-                // Unannotated source IR retains the historical FP16 dot policy.
-                let explicit = match (&left.kind, &right.kind) {
-                    (ExprKind::Cast(a, _), ExprKind::Cast(b, _)) if a == b => Some(a.as_str()),
-                    _ => None,
-                };
-                let dtype = if small && (self.options.managed || rank > 3 || explicit.is_some()) {
-                    "float32"
-                } else {
-                    explicit.unwrap_or("float16")
-                };
+                // Logical operand types determine dot precision independently of
+                // FP32 opmath. exp/reduction/accumulation alone do not widen it.
+                let operands = super::super::lowering::precision::merge_dtype(
+                    self.value_dtype(left),
+                    self.value_dtype(right),
+                )
+                .unwrap_or(self.options.default_dtype);
+                let dtype = if small { "float32" } else { operands.python() };
                 let precision = if dtype == "float32" {
                     ", input_precision='ieee'"
                 } else {
@@ -201,7 +188,7 @@ impl TritonPlan {
                     let mut output = batch.clone();
                     output.extend([a.shape[rank - 2].clone(), b.shape[rank - 1].clone()]);
                     format!(
-                        "tl.reshape(tl.dot(tl.reshape(tl.broadcast_to({av}, {}), ({batches}, {}, {})), tl.reshape(tl.broadcast_to({bv}, {}), ({batches}, {}, {})){precision}), {})",
+                        "tl.reshape(tl.dot(tl.reshape(tl.broadcast_to({av}, {}), ({batches}, {}, {})), tl.reshape(tl.broadcast_to({bv}, {}), ({batches}, {}, {})){precision}, out_dtype=tl.float32), {})",
                         tuple(ashape),
                         a.shape[rank - 2],
                         a.shape[rank - 1],
@@ -211,10 +198,9 @@ impl TritonPlan {
                         tuple(output)
                     )
                 } else {
-                    format!("tl.dot({av}, {bv}{precision})")
+                    format!("tl.dot({av}, {bv}{precision}, out_dtype=tl.float32)")
                 };
-                if self.options.managed
-                    && !small
+                if !small
                     && [&a.shape[rank - 2], &a.shape[rank - 1], &b.shape[rank - 1]]
                         .iter()
                         .any(|s| s.parse::<usize>().is_err())
@@ -263,6 +249,11 @@ impl TritonPlan {
                 } else {
                     format!("({}).to(tl.{dtype})", value.code)
                 };
+                if matches!(dtype.as_str(), "float16" | "bfloat16") {
+                    // Keep explicit rounding, then use FP32 opmath. A subsequent
+                    // dot still obtains the explicit logical type from value_dtype.
+                    value.code = format!("({}).to(tl.float32)", value.code);
+                }
                 value
             }
             ExprKind::Concat(axis, left, right) => {

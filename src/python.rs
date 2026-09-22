@@ -568,6 +568,46 @@ fn emit_python(py: Python<'_>, plan: PyRef<'_, PhysicalPlan>) -> PyResult<String
     py.allow_threads(move || tl::emit::emit_python(&p).map(|p| p.emit()).map_err(bad))
 }
 
+#[pyfunction]
+#[pyo3(signature=(plan, options_json="{}"))]
+fn emit_triton(
+    py: Python<'_>,
+    plan: PyRef<'_, PhysicalPlan>,
+    options_json: &str,
+) -> PyResult<String> {
+    let options = serde_json::from_str(options_json).map_err(bad)?;
+    let plan = plan.0.clone();
+    py.allow_threads(move || tl::emit::emit_triton(&plan, options).map_err(bad))
+}
+
+#[pyclass(frozen, module = "trinity_lowering._compiler")]
+struct TritonProgram(tl::emit::TritonProgram);
+#[pymethods]
+impl TritonProgram {
+    #[getter]
+    fn physical_plan(&self) -> PhysicalPlan {
+        PhysicalPlan(self.0.physical_plan().clone())
+    }
+    #[getter]
+    fn source(&self) -> String {
+        self.0.emit()
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature=(text, options_json="{}"))]
+fn lower_triton(py: Python<'_>, text: &str, options_json: &str) -> PyResult<TritonProgram> {
+    let options = serde_json::from_str(options_json).map_err(bad)?;
+    let text = text.to_owned();
+    py.allow_threads(move || {
+        let ir = tl::analysis::analyze_text(&text).map_err(bad)?;
+        tl::emit::TritonKernelProvider
+            .lower_source(ir, options)
+            .map(TritonProgram)
+            .map_err(bad)
+    })
+}
+
 #[pyclass(frozen, module = "trinity_lowering._compiler")]
 #[derive(Clone)]
 struct CompileConfig(tl::CompileConfig);
@@ -687,6 +727,7 @@ fn compile(
 fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PhysicalPlanBuilder>()?;
     m.add_class::<PhysicalPlan>()?;
+    m.add_class::<TritonProgram>()?;
     m.add_class::<Implementation>()?;
     m.add_class::<GemmDefinition>()?;
     m.add_class::<AllGatherDefinition>()?;
@@ -703,6 +744,8 @@ fn _compiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(broadcast_implementations, m)?)?;
     m.add_function(wrap_pyfunction!(emit, m)?)?;
     m.add_function(wrap_pyfunction!(emit_python, m)?)?;
+    m.add_function(wrap_pyfunction!(emit_triton, m)?)?;
+    m.add_function(wrap_pyfunction!(lower_triton, m)?)?;
     m.add_function(wrap_pyfunction!(lower_ir, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
 

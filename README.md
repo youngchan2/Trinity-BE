@@ -17,16 +17,19 @@ tensor program plans for the CUDA provider pipeline.
 | Explicit IR with symbol and dtype bindings | `lower_ir(text, config)` | `PhysicalPlan` values for the CUDA provider pipeline |
 | Explicit values, operations and loops | `PhysicalPlanBuilder::build(...)` | A validated `PhysicalPlan` |
 | A `PhysicalPlan` | `emit::kernel_candidates(&plan)` | CuTe/Triton/Quack candidates and unsupported reasons per operation |
-| Single-GPU, loop-free full-tensor `PhysicalPlan` | `emit::emit_python(&plan)` | Python module with `prepare(inputs)` for validation/selection and a reusable executable |
+| Single-GPU computation `PhysicalPlan`, including scheduled loops/regions | `emit::emit_triton(&plan, options)` | Triton kernels and ordered `forward(...)` launches |
+| Single-GPU `PhysicalPlan` | `emit::emit_python(&plan)` | Python `prepare(inputs)` and executable; compares independent operations or runs scheduled regions through Triton |
 
-The Triton fallback remains available independently of the native CUDA emitter.
-It uses `analysis::ScheduledIr` and `triton::TritonPlan`; the updated CUDA path
-uses `plan::PhysicalPlan`. The new Python candidate path adapts supported PhysicalPlan
-operations to Triton and compares them with Quack. Native CUDA emission is available
-through `emit(plan)`, but its implementations are not yet benchmarked alongside the
-Python candidates. Full scheduled-IR/loop integration with that selection path also
-remains separate. Unannotated Triton source IR defaults
-to FP16; typed candidates preserve the PhysicalPlan's BF16/FP32 storage.
+The fallback now follows `scheduled IR → PhysicalPlan → TritonKernelProvider →
+TritonPlan → source + launches`. Views, symbolic dimensions, ordered regions,
+loops, outputs and input mutations belong to the common plan. Triton chooses
+padding, local representation, numerical precision and launch configurations.
+It consumes typed plan expressions directly, without reparsing a saved source AST.
+Independent full-tensor operations can still compare Triton with Quack. Whole
+scheduled regions currently execute Triton directly; cross-provider benchmarking
+of those regions and native CUDA implementations remains future work.
+Unannotated source IR defaults to FP16; typed Triton candidates preserve explicit
+FP16/BF16/FP32 storage. Native CUDA continues to require BF16/FP32.
 The former CUDA `lower_loop_ir` API is now named `lower_ir`.
 
 ## Getting started
@@ -88,16 +91,16 @@ See the [architecture guide](docs/architecture/README.md) for the public API and
 
 | Location | Purpose |
 | --- | --- |
-| [src/analysis](src/analysis/) | ScheduledIr and shared shape, access, scope and dataflow facts |
+| [src/analysis](src/analysis/) | Shared shape, access, scope and dataflow facts; storage inference; source collection and PhysicalPlan projection |
 | [src/triton/plan.rs](src/triton/plan.rs) | Triton program and per-kernel plans |
-| [src/triton/lowering](src/triton/lowering/) | Triton storage, initialization, indexing and launch planning |
+| [src/triton/lowering](src/triton/lowering/) | Triton padding, SSA initialization, numerical precision, indexing and launch planning |
 | [src/triton/codegen](src/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
-| [src/plan](src/plan/) | Physical plan construction and validation |
+| [src/plan](src/plan/) | Physical plan construction, scheduled-IR import, symbolic binding and validation |
 | [src/implementation/definitions](src/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
 | [src/emit](src/emit/) | CUDA scope collection, provider selection, kernel composition, execution placement and rendering |
 | [src/emit/candidate.rs](src/emit/candidate.rs) | Candidate discovery without choosing the first supported provider |
 | [src/emit/provider/quack](src/emit/provider/quack/) | Optional opaque GEMM/epilogue specifications and Python call wrappers |
-| [src/emit/provider/triton](src/emit/provider/triton/) | Typed operation adapter that reuses the existing Triton analyzer and emitter |
+| [src/emit/provider/triton](src/emit/provider/triton/) | Whole-program fallback provider and operation adapter using the same path |
 | [src/emit/program](src/emit/program/) | Python program assembly, correctness checks, benchmarking, selection and execution |
 | [src/compile/cuda](src/compile/cuda/) | NVCC compilation and artifact ownership |
 | [src/python.rs](src/python.rs) | Python compiler bindings |
@@ -137,9 +140,30 @@ skips when that harness is unavailable.
 ## Triton source generation
 
 Use `triton::compile(text, options)` or `analysis::analyze_text(text)` followed by
-`triton::lower(analysis, options)` and `TritonPlan::emit()`. The IR's computation
-graph and loop schedule are preserved. Managed mode allocates intermediate
-tensors and returns outputs; it is enabled automatically for programs with `mloop`.
+`triton::lower(analysis, options)` and `TritonPlan::emit()`. Both enter the common
+PhysicalPlan and Triton provider. The IR's computation
+graph and loop schedule are preserved. The wrapper allocates intermediate
+tensors and returns outputs through one emission path, including `mloop` programs.
+
+For an inspectable common plan, use `TritonKernelProvider.lower_source(...)` in
+Rust or `lower_triton(text, **options)` in Python. The result exposes the common
+plan and generated source. See [the provider contract and usage](docs/architecture/triton-provider.md).
+
+Both `lower_ir` and `PhysicalPlanBuilder::from_scheduled` use `analysis::storage`
+to assign `ValueInstance.storage`:
+ABI inputs/outputs are `External`, intermediates that need materialization or
+cross a kernel boundary are `Global`, and compatible local intermediates are
+`Register`. Triton honors these backing-storage decisions; a global output can
+still be accumulated locally before its final store.
+`lower_ir` retains unbound tile symbols when their access relationships suffice
+to prove the storage classification; it never supplies a hidden sample tile.
+
+Emission uses FP32 register computation and accumulation while retaining
+logical storage and GEMM operand dtypes. Raw-exp overflow is an IR numerical
+limitation; emission does not silently insert stabilization. It validates multiple symbolic tile assignments and
+benchmarks up to 64 configurations per kernel by default. See
+[precision policy](docs/architecture/triton-precision.md) and
+[autotuning policy](docs/architecture/triton-autotuning.md) for controls and limits.
 
 ```sh
 cargo test --locked --test batched_mla_emit -- --nocapture
@@ -178,6 +202,32 @@ at zero, with initialization generated by Emit. Builder communication uses an ex
 
 The producer of the IR or direct Builder input is responsible for validating loop
 ranges and memory accesses. Plan construction validates structural consistency.
+
+`TensorAccess` holds a value ID, an optional contiguous `view_shape`, and indices
+in view-axis order. `ValueInstance::shape()` remains the allocation/ABI shape;
+different views of one value share storage and must preserve the element count.
+The text reader uses the first view as the base shape, and retains later views
+on their accesses. The Builder can declare the base shape separately. The explicit
+`lower_ir` reader requires concrete view extents. The scheduled frontend also
+retains `view_dimensions` expressions and symbolic base dimensions alongside
+sample shapes, so split scratch allocations and accesses specialize together.
+
+`AccessIndex::Tile` and `ClippedTile` use `TileWidth::Constant(32)` or
+`TileWidth::Symbol("BLOCK".into())`. Unbound tile/loop parameters remain in the plan;
+symbols supplied to `lower_ir` are resolved immediately. Before provider selection
+or emission, call `plan.bind_symbols(&bindings)` in Rust, or
+`plan.bind_symbols({"BLOCK": 32})` in Python. This returns a new plan with both
+tile widths and loop ranges bound consistently, leaving literal widths unchanged.
+`plan.symbols()` (Python: `plan.symbols`) lists symbolic configuration names,
+including those with sample defaults in `plan.bindings()`.
+Binding is not autotuning: candidate enumeration and timing remain separate.
+
+CuTe uses access views for tile shapes and addressing. Native coverage checks
+compare physical storage intervals across views. The loop-free Triton candidate
+adapter also preserves views; the Quack host adapter currently rejects changed
+views until its argument binding supports them. The scheduled-IR Triton provider
+now consumes the same common plan, including multiple outputs and input cache
+updates. This does not expand native/Quack coverage automatically.
 
 The current `trinity::lower(candidate, ...)` input contains a whole-tensor DAG, not
 an explicit loop program. Its automatic expansion path has been retired and now

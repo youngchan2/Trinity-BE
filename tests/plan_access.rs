@@ -146,6 +146,15 @@ fn text_reader_preserves_different_views_of_one_intermediate() {
             .code()
             .contains("cute::make_stride(int64_t(32), int64_t(1))")
     );
+    let python = emit::emit_python(&p).unwrap();
+    assert_eq!(
+        python.manifest()["operations"][1]["expression"]["view_shape"],
+        serde_json::json!([4, 32])
+    );
+    assert!(python.sources().keys().any(|name| name.contains("triton")));
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/plan_access");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("views.py"), python.emit()).unwrap();
     assert!(lower_ir(&text.replace("axis row 4", "axis row 3"), &config()).is_err());
 }
 
