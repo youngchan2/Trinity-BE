@@ -9,12 +9,8 @@ pub mod compile;
 mod config;
 mod dtype;
 pub mod emit;
-mod fusion;
-mod implementation;
-mod plan;
 pub mod platform;
 mod python;
-pub mod triton;
 
 pub use compile::{
     CompileConfig, CompileDiagnostics, CompileError, CudaArtifact, CudaSource, compile,
@@ -23,19 +19,21 @@ pub use compile::{
 pub use config::LoweringConfig;
 pub use dtype::DType;
 pub use emit::{EmitError, emit};
-pub use fusion::{FusionError, FusionRewrite, FusionRule, fuse};
-pub use implementation::{
-    AllGatherImplementation, AttributeSet, BroadcastImplementation, GemmImplementation,
-    ImplementationDefinition, ImplementationId, ImplementationInstance, PointwiseImplementation,
-    ReduceSumImplementation, all_gather_implementations, broadcast_implementations, fusion_rules,
-    gemm_implementations, pointwise_implementations, reduce_sum_implementations,
-};
-pub use plan::{
+// Preserve the public API while implementations live under analysis and emit.
+pub use analysis::plan::{
     AccessIndex, Constant, Expression, IndexExpr, IrConfig, IrError, Loop, LoopDomain, LoopKind,
     Operation, OperationId, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder,
     ScheduledConfig, Statement, Storage, TensorAccess, TensorBinding, TileWidth, ValueInstance,
     ValueInstanceId, ValueOp, lower_ir,
 };
+pub use emit::fusion::{FusionError, FusionRewrite, FusionRule, fuse};
+pub use emit::implementation::{
+    AllGatherImplementation, AttributeSet, BroadcastImplementation, GemmImplementation,
+    ImplementationDefinition, ImplementationId, ImplementationInstance, PointwiseImplementation,
+    ReduceSumImplementation, all_gather_implementations, broadcast_implementations, fusion_rules,
+    gemm_implementations, pointwise_implementations, reduce_sum_implementations,
+};
+pub use emit::provider::triton;
 pub use platform::{AsStr, CudaTargetCapability, TargetCapability};
 
 #[cfg(test)]

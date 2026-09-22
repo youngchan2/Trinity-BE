@@ -43,7 +43,7 @@ changing lowering options or the emitter; already generated Python is unchanged.
 
 ## Candidate validation and execution
 
-`src/triton/lowering/tuning.rs` reuses lowering with each tile assignment, without
+`src/emit/provider/triton/lowering/tuning.rs` reuses lowering with each tile assignment, without
 recursively planning another search. It rejects invalid broadcasts, dot shapes,
 producer coverage, or ownership. Register/global storage, local-view bindings,
 and allocation shapes must match the baseline plan. A variable step cannot

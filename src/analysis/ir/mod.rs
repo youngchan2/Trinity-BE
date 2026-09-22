@@ -1,6 +1,11 @@
 use std::collections::BTreeSet;
 
-use super::{IrNode, SourceSpan};
+mod collect;
+mod physical;
+mod syntax;
+pub use collect::{AnalysisError, analyze, analyze_text};
+pub use physical::from_physical;
+pub use syntax::{IrNode, ParseError, SourceSpan};
 
 macro_rules! ids {
     ($($name:ident),+ $(,)?) => {$(

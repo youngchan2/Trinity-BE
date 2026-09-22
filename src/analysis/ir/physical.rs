@@ -1,6 +1,6 @@
 //! Direct projection of a PhysicalPlan into shared occurrence/scope tables.
 //! No text serialization, parsing, pattern-based schedule recovery, or IR rewrite.
-use super::*;
+use crate::analysis::*;
 use crate::{
     AccessIndex as A, Expression as E, IndexExpr as I, PhysicalPlan, Statement, TileWidth, ValueOp,
 };

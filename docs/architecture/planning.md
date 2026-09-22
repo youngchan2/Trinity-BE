@@ -7,6 +7,16 @@
 
 [Architecture 안내](README.md)에서 전체 단계와 관련 소스를 찾을 수 있다.
 
+## 분석 파일의 배치
+
+- `analysis/ir/`: 공통 parser와 ScheduledIr 모델, source 수집 및 PhysicalPlan projection.
+- `analysis/facts/`: 기존 접근·loop·scalar·metadata·dependency·flow·dtype 분석과 `ProgramFacts`.
+- `analysis/storage/`: 공통 facts에 근거한 storage/초기화/publication 계약.
+- `analysis/plan/`: 기존 PhysicalPlan 표현·builder·reader·normalization.
+
+`facts/`는 기존 분석 파일을 함께 묶은 것이다. 새로운 분석 단계나 정책을 추가하지 않았다.
+기존 공개 `analysis::*` API는 `analysis/mod.rs`의 re-export를 통해 유지한다.
+
 ## 입력 경로
 
 | 진입점 | 입력과 결과 | 현재 차이 |
@@ -15,14 +25,14 @@
 | `lower_ir(text, &IrConfig)` | explicit 텍스트 → `Vec<PhysicalPlan>` (현재 한 plan) | 공통 storage 추론을 사용하지만 별도 Reader/Builder 경로. 한 출력 경로이며 모든 extended-source 기능과 동등하다고 보장하지 않음 |
 | 직접 `PhysicalPlanBuilder` | dtype/shape/storage와 operation/statement 직접 등록 → plan | storage와 명시 dtype은 호출자가 지정. 공개 `build`는 출력 하나를 받음; 내부 `build_program`은 공개 다중 출력 builder API가 아님 |
 
-구현: [scheduled](../../src/plan/scheduled.rs), [explicit reader](../../src/plan/ir.rs),
-[builder](../../src/plan/builder.rs). `lower_ir`도 `analysis::storage::infer_source`를
+구현: [scheduled](../../src/analysis/plan/scheduled.rs), [explicit reader](../../src/analysis/plan/ir.rs),
+[builder](../../src/analysis/plan/builder.rs). `lower_ir`도 `analysis::storage::infer_source`를
 사용한다. 예전의 모든 intermediate를 Global로 두는 분류는 현재 경로가 아니다.
 `from_scheduled`는 제공된 shape/symbol binding으로 공통 facts를 확정한다.
 Triton의 `lower_source` 편의 진입점은 그 전에 provider의 기본 tile 값을 정해 전달한다.
 공통 builder 자체가 backend 성능 후보나 최적 tile을 선택하는 것은 아니다.
 
-텍스트 syntax는 [analysis/ir.rs](../../src/analysis/ir.rs)의 `IrNode::parse` 한 곳에서 처리한다.
+텍스트 syntax는 [analysis/ir/syntax.rs](../../src/analysis/ir/syntax.rs)의 `IrNode::parse` 한 곳에서 처리한다.
 explicit `lower_ir`는 한 번 파싱한 AST를 공통 수집과 Reader가 함께 사용한다.
 Python Builder의 expression/index 문자열도 같은 parser를 사용한다. 주석, source span,
 중첩 제한과 syntax 오류 위치가 공유되지만, 각 Reader의 지원 연산·arity·의미 해석은 유지한다.
@@ -30,7 +40,7 @@ Parser 통합이 explicit Reader의 extended IR 지원 범위를 넓힌다는 �
 
 ### Logical dtype 확정
 
-[analysis/dtype.rs](../../src/analysis/dtype.rs)의 `analysis::dtype::resolve`가
+[analysis/facts/dtype.rs](../../src/analysis/facts/dtype.rs)의 `analysis::dtype::resolve`가
 scheduled source의 logical/storage dtype을 확정하고 `from_scheduled`가 각
 `ValueInstance::dtype()`에 기록한다. 입력/출력 기본값과 명시 override가 전파의 기준이며,
 미명시 중간값은 operand type을 따라 fixed point로 계산한다. scalar-only producer는
@@ -44,7 +54,7 @@ FP16으로 가정해 BF16과 잘못 섞지 않는다. exp/reduction의 FP32 계�
 
 ## PhysicalPlan이 소유하는 정보
 
-[정확한 타입과 getter](../../src/plan/mod.rs)가 API 원본이다.
+[정확한 타입과 getter](../../src/analysis/plan/mod.rs)가 API 원본이다.
 
 | 정보 | 타입/API | 의미 |
 | --- | --- | --- |
@@ -64,7 +74,7 @@ Builder가 ID와 loop 이름을 canonicalize하므로 build 이전 ID를 최종 
 
 ### TensorAccess: 값의 shape와 접근 view를 분리
 
-[TensorAccess](../../src/plan/expression.rs)는 다음을 가진다.
+[TensorAccess](../../src/analysis/plan/expression.rs)는 다음을 가진다.
 
 - `value`: `ValueInstanceId`.
 - `view_shape`: 이 접근에서 바라보는 shape. 없으면 base `ValueInstance::shape()`.
@@ -89,7 +99,7 @@ Loop step(이동량)과 tile width(접근 폭)도 독립적이다.
 
 ### Statement와 연산
 
-[Statement/Loop](../../src/plan/statement.rs)는 아래 구조를 유지한다.
+[Statement/Loop](../../src/analysis/plan/statement.rs)는 아래 구조를 유지한다.
 
 - `Region(body)`: scheduled source의 kernel 영역. Triton program provider에 전달할 때
   내부 store와 sequential loop를 독립 host-call 후보로 임의 분해하지 않는다.
@@ -105,7 +115,7 @@ Builder의 `AllGather`는 통신 의미를 표현할 수 있지만, 이것이 �
 ## 공통 분석과 storage
 
 전체 facts를 PhysicalPlan 필드에 복제해 저장하지 않는다. Plan은 의미를 소유하고,
-[analysis::from_physical](../../src/analysis/physical.rs)이 그것을 occurrence/scope 표로
+[analysis::from_physical](../../src/analysis/ir/physical.rs)이 그것을 occurrence/scope 표로
 투영한다. source 문자열을 직렬화·재파싱하지 않으며, 이 `ScheduledIr::ir()`은 `None`이다.
 분석을 위해 원본 텍스트를 provider에 별도로 넘길 필요는 없다.
 
@@ -151,7 +161,7 @@ producer 누락을 구분한다. `additive_updates`는 중첩 덧셈·scaled sel
 
 Region 밖의 직접 Builder/explicit reader에는 단일 본문의 sequential reduction을
 zero-start로 해석하는 기존 규약도 남아 있다. Scheduled seed 보존과 이 규약이 모든 경우에
-동일하다고 가정하지 않는다. [normalize](../../src/plan/normalize.rs)와
+동일하다고 가정하지 않는다. [normalize](../../src/analysis/plan/normalize.rs)와
 [recurrence 테스트](../../tests/triton_recurrence.rs)를 함께 확인한다.
 
 현재 dependency 분석은 ordered access와 제한된 coverage/scope 증명이다.

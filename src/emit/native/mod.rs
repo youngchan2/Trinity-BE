@@ -5,7 +5,11 @@ use super::provider::cute::{
     HopperGemmSpecification, PointwiseSpecification, ReduceSumSpecification, Sm80GemmSpecification,
 };
 use super::provider::{KernelContext, KernelProvider, ProviderError};
-use crate::ValueInstanceId;
+use super::{EmitError, execution, prepare, provider};
+use crate::{CudaSource, PhysicalPlan, ValueInstanceId};
+pub(super) mod collect;
+pub(super) mod combine;
+mod cuda;
 use std::collections::BTreeMap;
 
 pub(super) mod access;
@@ -151,4 +155,38 @@ pub(super) struct Kernel {
     pub prologue: KernelCode,
     pub mainloop: Option<KernelCode>,
     pub epilogue: KernelCode,
+}
+
+pub(super) fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
+    if plan.world_size() != 1 {
+        return Err(EmitError::UnsupportedExecution {
+            reason: "Persistent emission is not implemented".into(),
+        });
+    }
+    if plan
+        .value_instances()
+        .any(|(_, v)| v.dtype() == crate::DType::Fp16)
+    {
+        return Err(EmitError::UnsupportedExecution {
+            reason: "native CUDA runtime supports BF16/FP32; use emit_triton for FP16".into(),
+        });
+    }
+    fn has_split(nodes: &[crate::Statement]) -> bool {
+        nodes.iter().any(|s| match s {
+            crate::Statement::Region(body) => has_split(body),
+            crate::Statement::Loop(l) => l.kind == crate::LoopKind::Split || has_split(&l.body),
+            crate::Statement::Operation(_) => false,
+        })
+    }
+    if has_split(plan.statements()) {
+        return Err(EmitError::UnsupportedExecution {
+            reason: "native CUDA split-loop composition is not implemented; use emit_triton".into(),
+        });
+    }
+    let prepared = prepare::prepare(plan)?;
+    let execution = execution::plan_execution(prepared.plan);
+    let provider = provider::CuTeKernelProvider;
+    let selected = collect::collect(&prepared, execution, &[&provider])?;
+    let combined = combine::combine(&prepared, execution, selected)?;
+    cuda::emit(prepared, &combined)
 }

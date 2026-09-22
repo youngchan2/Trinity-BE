@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn discovery_retains_alternatives_instead_of_selecting_the_first() {
-        let plan = super::super::combine::tests::pipelines().remove(0);
+        let plan = super::super::native::combine::tests::pipelines().remove(0);
         let all = discover(&plan, &[&CuTeKernelProvider, &CuTeKernelProvider]).unwrap();
         assert!(all.values().all(|entry| entry.candidates.len() == 2));
     }

@@ -9,6 +9,11 @@ pointwise/reduction/GEMM과 Register 결합을 지원한다. Persistent와 Nativ
 별도로 `kernel_candidates`와 `emit_python`의 제한된 Triton/Quack host-call 경로는 구현되어 있다.
 설명과 검증 범위를 구분하며, [Triton provider의 진입점 표](triton-provider.md#selection-boundary-and-current-limits)가 경로 비교의 원본이다.
 
+`emit/mod.rs`의 공개 CUDA 진입점은 `native::emit`에 위임한다.
+`native/collect.rs`가 구현을 수집하고 `native/combine/`과 `native/cuda/`가 조합·출력을 처리한다.
+Python 프로그램 구성은 `emit/wrapper/`에 있으며, 공개 `PythonProgram`/`emit_python` API는 유지한다.
+CuTe·Triton·Quack 구현은 모두 `emit/provider/`에 있고, Triton lowering/codegen도 해당 provider 안에 있다.
+
 ## 문서 구성
 
 - [Kernel Providers](emission/kernel-providers/README.md): Native/Opaque 구현과 선택 정책 안내.
@@ -32,7 +37,7 @@ Triton의 target/config와 검증 범위는 [provider 문서](triton-provider.md
 
 아래 Native 명세·조합·Streamed 설명과 Persistent/통합 Opaque의 후속 설계를 구분한다.
 현재 공개 함수는 [emit/mod.rs](../../src/emit/mod.rs), 후보는
-[candidate.rs](../../src/emit/candidate.rs), Python 분기는 [program/mod.rs](../../src/emit/program/mod.rs)에 있다.
+[candidate.rs](../../src/emit/candidate.rs), Python 분기는 [wrapper/mod.rs](../../src/emit/wrapper/mod.rs)에 있다.
 
 ## Kernel
 
@@ -103,7 +108,7 @@ GEMM의 CTA barrier를 부분 그룹 barrier로 자동 치환하거나 thread �
 
 ![KernelProvider의 후보 명세 생성과 렌더링 구조](../images/trinity-lowering-kernel-provider.svg)
 
-[공통 `KernelProvider`](../../src/emit/provider.rs)는 `name()`과 `candidates()`만 요구한다.
+[공통 `KernelProvider`](../../src/emit/provider/mod.rs)는 `name()`과 `candidates()`만 요구한다.
 Triton·Quack의 opaque 후보는 Native phase/layout/CTA binding 계약을 구현하지 않는다.
 
 [`NativeKernelProvider`](../../src/emit/native/mod.rs)는 이와 별도의 Native 조합 능력이다.
@@ -131,7 +136,7 @@ Single GPU용 텍스트 IR과 Builder는 공통 Plan 모델을 사용한다. Mul
 
 ### Native 선택 정책
 
-이 절은 `emit/collect.rs`의 Native 경로를 설명한다. `kernel_candidates`의 후보 보존 및 Python의 정확성·시간 비교와 구분한다.
+이 절은 `emit/native/collect.rs`의 Native 경로를 설명한다. `kernel_candidates`의 후보 보존 및 Python의 정확성·시간 비교와 구분한다.
 
 각 Operation마다 Provider를 등록된 우선순위대로 시도하고, 처음 지원하는 Provider의 구현
 하나를 선택한다. 하나의 Plan에서 서로 다른 Provider를 사용할 수 있다.
@@ -258,7 +263,7 @@ Target과 rank 수, 버퍼 binding, workspace, shared memory, thread 구성과
 configuration symbol이 bound 상태인지 검사한다. 값의 dtype·shape·storage와 Loop/순서는
 이미 common plan이 소유한다. 이 단계는 CUDA allocation 크기나 launch slot을 만들지 않는다.
 
-현재 Native 경로는 `prepare` → `collect` → `combine` → `cuda::emit`이다.
+현재 Native 경로는 `native::emit` 안의 `prepare` → `collect` → `combine` → `cuda::emit`이다.
 `collect`는 Native provider만 받는다. `cuda::emit` 내부에서
 [`native/bindings`](../../src/emit/native/bindings.rs)가 단일 출력·불변 입력 ABI 조건,
 External/Global 버퍼의 row-major strides, bytes, slot과 기본 alignment를 준비한다.

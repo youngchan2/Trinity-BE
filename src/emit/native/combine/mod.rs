@@ -1,10 +1,10 @@
 //! Composition within provider boundaries using access, phase, and thread contracts.
 
-use super::EmitError;
 use super::collect::{SelectedKernel, SelectedKernels};
-use super::execution::ExecutionModel;
-use super::prepare::PreparedPlan;
+use crate::emit::EmitError;
+use crate::emit::execution::ExecutionModel;
 use crate::emit::native::{KernelInterface, RegisterLayout, ThreadPolicy};
+use crate::emit::prepare::PreparedPlan;
 use crate::{LoopDomain, LoopKind, OperationId, PhysicalPlan, Statement, Storage, ValueInstanceId};
 use std::collections::BTreeMap;
 
@@ -13,14 +13,14 @@ mod render;
 #[cfg(test)]
 pub(in crate::emit) mod tests;
 
-pub(super) struct CombinedPlan<'provider> {
+pub(in crate::emit) struct CombinedPlan<'provider> {
     pub execution: ExecutionModel,
     pub kernels: BTreeMap<OperationId, SelectedKernel<'provider>>,
     pub statements: Vec<CombinedStatement>,
 }
 
 #[derive(Debug)]
-pub(super) enum CombinedStatement {
+pub(in crate::emit) enum CombinedStatement {
     Loop {
         kind: LoopKind,
         domain: LoopDomain,
@@ -30,7 +30,7 @@ pub(super) enum CombinedStatement {
 }
 
 #[derive(Debug)]
-pub(super) struct CombinedBody {
+pub(in crate::emit) struct CombinedBody {
     /// Each root owns its output continuations and their lexical register lifetime.
     pub roots: Vec<Invocation>,
     pub requirements: BodyRequirements,
@@ -39,7 +39,7 @@ pub(super) struct CombinedBody {
 
 /// Execution requirements resolved for a complete body, not an individual kernel.
 #[derive(Debug)]
-pub(super) struct BodyRequirements {
+pub(in crate::emit) struct BodyRequirements {
     pub block_threads: usize,
     pub shared_memory_bytes: usize,
     pub shared_memory_alignment: usize,
@@ -47,7 +47,7 @@ pub(super) struct BodyRequirements {
 }
 
 #[derive(Debug)]
-pub(super) struct Invocation {
+pub(in crate::emit) struct Invocation {
     pub operation: OperationId,
     pub iteration: Option<LoopDomain>,
     pub followers: Vec<OperationId>,
@@ -56,14 +56,14 @@ pub(super) struct Invocation {
 }
 
 #[derive(Debug)]
-pub(super) struct Connection {
+pub(in crate::emit) struct Connection {
     pub producer: OperationId,
     pub output: usize,
     pub consumer: OperationId,
     pub input: usize,
 }
 
-pub(super) fn combine<'p>(
+pub(in crate::emit) fn combine<'p>(
     prepared: &PreparedPlan<'_>,
     execution: ExecutionModel,
     selected: SelectedKernels<'p>,
@@ -296,7 +296,7 @@ struct RegisterProducer {
     operation: OperationId,
     output: usize,
     root: usize,
-    port: super::native::KernelPort,
+    port: crate::emit::native::KernelPort,
     layout: RegisterLayout,
 }
 
@@ -482,11 +482,11 @@ fn check_memory_order(prior: &KernelInterface, next: &KernelInterface) -> Result
 }
 
 impl CombinedPlan<'_> {
-    pub(super) fn render_body(
+    pub(in crate::emit) fn render_body(
         &self,
         body: &CombinedBody,
-        bindings: &super::native::KernelBindings,
-    ) -> Result<render::RenderedBody, super::provider::ProviderError> {
+        bindings: &crate::emit::native::KernelBindings,
+    ) -> Result<render::RenderedBody, crate::emit::provider::ProviderError> {
         render::render_body(self, body, bindings)
     }
 }
@@ -494,7 +494,7 @@ impl CombinedPlan<'_> {
 /// A producer in this CTA must cover memory consumed by subsequent roots.
 /// Bounds validity remains the responsibility of the input generator.
 fn check_memory_coverage(prior: &KernelInterface, next: &KernelInterface) -> Result<(), String> {
-    use super::native::access::Axis;
+    use crate::emit::native::access::Axis;
     for output in &prior.outputs {
         for input in &next.inputs {
             if output.access.storage == Storage::Register

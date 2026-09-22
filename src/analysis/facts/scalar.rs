@@ -1,5 +1,5 @@
 //! Scalar expressions and logical bounds shared by implementation providers.
-use super::{IndexExpr, ResolveError, ScheduledIr, ScopeId, invalid};
+use crate::analysis::{IndexExpr, ResolveError, ScheduledIr, ScopeId, invalid};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn symbols(expr: &IndexExpr) -> BTreeSet<String> {

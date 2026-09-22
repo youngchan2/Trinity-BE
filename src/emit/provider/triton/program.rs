@@ -2,7 +2,7 @@
 //! into independent launches merely to fit the operation-candidate interface.
 use super::TritonKernelProvider;
 use crate::analysis::{self, Bindings, ScheduledIr, TensorMetadata};
-use crate::triton::{self, Error, Options, TritonPlan, invalid};
+use crate::emit::provider::triton::{self, Error, Options, TritonPlan, invalid};
 use crate::{PhysicalPlan, PhysicalPlanBuilder, ScheduledConfig, Storage};
 
 #[derive(Clone)]

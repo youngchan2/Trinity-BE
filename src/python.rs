@@ -311,7 +311,7 @@ fn python_index(value: &Bound<'_, PyAny>) -> PyResult<tl::IndexExpr> {
         return Ok(tl::IndexExpr::Constant(n));
     }
     let text = value.extract::<String>()?;
-    tl::plan::parse_index(&text).map_err(bad)
+    tl::analysis::plan::parse_index(&text).map_err(bad)
 }
 
 #[pyclass(module = "trinity_lowering._compiler")]

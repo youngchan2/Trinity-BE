@@ -2,7 +2,7 @@ use super::super::access;
 use super::*;
 use crate::emit::native::NativeKernelProvider;
 use crate::emit::provider::CuTeKernelProvider;
-use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
+use crate::emit::{execution::plan_execution, native::collect::collect, prepare::prepare};
 use crate::{
     DType, IndexExpr, Loop, LoopDomain, LoweringConfig, PhysicalPlan, PhysicalPlanBuilder,
     Statement, Storage,

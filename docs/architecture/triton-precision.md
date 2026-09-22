@@ -38,7 +38,7 @@ the dtype of its temporary register representation.
 | Explicit/logically FP32 dot inputs | Existing `input_precision='ieee'` |
 | Global store and wrapper allocation | Resolved logical/storage dtype, including inter-kernel scratch |
 
-`analysis::dtype::resolve` in [analysis/dtype.rs](../../src/analysis/dtype.rs)
+`analysis::dtype::resolve` in [analysis/facts/dtype.rs](../../src/analysis/facts/dtype.rs)
 propagates logical types forward through
 unannotated intermediate definitions to a fixed point. Unary operations,
 reductions and views preserve their operand's logical type; binary operations
@@ -81,7 +81,7 @@ independent candidate preparation no longer reject values merely for being infer
 Triton's program provider imports every finalized dtype and rejects conflicting
 `Options::dtypes` overrides, including inferred intermediates. Change source
 configuration and rebuild the common plan to request different logical types.
-[precision.rs](../../src/triton/lowering/precision.rs) only queries types of
+[precision.rs](../../src/emit/provider/triton/lowering/precision.rs) only queries types of
 lowered inline expressions from these contracts; shared merge/cast rules come
 from `analysis::dtype`. It no longer runs tensor dtype inference. FP32 opmath,
 accumulator representation and the actual cast locations remain in Triton.
@@ -90,7 +90,7 @@ accumulator representation and the actual cast locations remain in Triton.
 rounding at some register producer/consumer boundaries, while Triton keeps
 ordinary register intermediates in FP32. See the Native test
 `forwards_registers_in_each_producers_output_scope_with_rounding_and_fanout` in
-[combine tests](../../src/emit/combine/tests.rs). Quack's actual rounding depends
+[combine tests](../../src/emit/native/combine/tests.rs). Quack's actual rounding depends
 on the selected library API and has not been verified against this policy.
 Common `Storage::Register` does not establish bitwise equivalence between these
 implementations. New candidate comparisons must explicitly decide logical dtype,

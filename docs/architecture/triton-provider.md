@@ -19,8 +19,8 @@ Scheduled IR text
       → analysis::from_physical            shared occurrence/scope tables
       → ProgramFacts                       logical access regions and dataflow
       → analysis::storage::for_values     retain and validate storage contracts
-      → triton/lowering                    TritonPlan + KernelPlans
-  → triton/codegen                         kernel_N + forward(...)
+      → Triton lowering                    TritonPlan + KernelPlans
+  → Triton codegen                         kernel_N + forward(...)
 ```
 
 `lower_source` supplies sample shape/tile bindings before common construction.
@@ -29,16 +29,22 @@ that owns the target and bindings can call `from_scheduled` with `ScheduledConfi
 or construct a plan directly. `lower_program` preserves that plan's target.
 Neither source generation entry queries a GPU.
 
+The provider and its source backend now share `src/emit/provider/triton/`:
+`candidate.rs` owns operation candidates, `program.rs` accepts whole programs,
+and `plan.rs`, `lowering/`, `codegen/` retain their existing responsibilities.
+The public Rust path `trinity_lowering::triton` remains a re-export of this module.
+
 ## Information ownership
 
 | Layer | Information |
 | --- | --- |
-| `plan/` | Value identity, allocation/ABI shape, backing storage class, finalized logical/storage dtype, per-access view shape and symbolic dimensions, indices, expressions, ordered regions and loops, inputs/outputs, input mutation and initial recurrence seeds |
-| `analysis/` | Common syntax parsing, logical dtype inference, logical access ranges, lexical scopes, producer/read relationships, recurrence and coverage facts derived from the common program |
+| `analysis/plan/` | Value identity, allocation/ABI shape, backing storage class, finalized logical/storage dtype, per-access view shape and symbolic dimensions, indices, expressions, ordered regions and loops, inputs/outputs, input mutation and initial recurrence seeds |
+| `analysis/ir/` | Common syntax parsing, scheduled occurrence/scope representation and collection, projection from PhysicalPlan |
+| `analysis/facts/` | Logical dtype inference, access ranges, shapes, loop/dependency/flow and coverage facts |
 | `analysis/storage/` | Common backing-storage inference, materialization requirements, local read bindings, recurrence initialization and publication scope |
 | `emit/provider/triton/` | Accept/reject the plan's storage/dtype contracts; pass shared facts into Triton lowering; preserve ABI output order |
-| `triton/lowering/` | Padded tile shapes, Triton SSA incoming-value initialization, accumulator representation, FP32 opmath/cast implementation, grids and autotuning configurations |
-| `triton/codegen/` | Triton expressions, load/store offsets and masks, loop bodies, kernels, scratch allocation and launch wrapper |
+| `emit/provider/triton/lowering/` | Padded tile shapes, Triton SSA incoming-value initialization, accumulator representation, FP32 opmath/cast implementation, grids and autotuning configurations |
+| `emit/provider/triton/codegen/` | Triton expressions, load/store offsets and masks, loop bodies, kernels, scratch allocation and launch wrapper |
 
 Unannotated source intermediates have `dtype_is_explicit() == false`, but their
 `dtype()` is already finalized by common analysis. This flag records provenance,
@@ -60,7 +66,7 @@ there is no remaining Triton-only source storage classifier.
 `TritonKernelProvider::lower_program` projects the common plan and passes its
 `ValueInstance.storage` map into `triton::lowering::lower_projected`.
 `analysis::storage::for_values` validates those contracts and derives local reads,
-initialization and publication facts. `triton/lowering/storage.rs` consumes them
+initialization and publication facts. `emit/provider/triton/lowering/storage.rs` consumes them
 and adds Triton grid/SSA requirements. It does not silently reassign backing
 storage. A Global/External value can still have a local accumulator and publish
 at the common export scope; this is distinct from making the value Register.
@@ -200,9 +206,9 @@ TRITON_CACHE_DIR=/tmp/trinity-provider-cache python tests/triton_provider_python
   GPU resource feasibility on another target, or good performance.
 
 Sources: [program provider](../../src/emit/provider/triton/program.rs),
-[grid validation](../../src/triton/lowering/loops.rs),
-[kernel specialization](../../src/triton/lowering/storage.rs),
-[expression lowering](../../src/triton/lowering/expression.rs).
+[grid validation](../../src/emit/provider/triton/lowering/loops.rs),
+[kernel specialization](../../src/emit/provider/triton/lowering/storage.rs),
+[expression lowering](../../src/emit/provider/triton/lowering/expression.rs).
 
 ## Reuse by Quack and CuTe
 
@@ -212,7 +218,7 @@ once the plan owns those expressions. Backend-specific layout/code is not
 available from `ValueInstance.storage` alone.
 
 The in-crate `KernelProvider`/`KernelContext` in
-[provider.rs](../../src/emit/provider.rs) provide candidate discovery without
+[provider/mod.rs](../../src/emit/provider/mod.rs) provide candidate discovery without
 native rendering requirements. `NativeKernelProvider`, `SpecifiedKernel`,
 phase code, CTA requirements and register bindings are owned by
 [native/mod.rs](../../src/emit/native/mod.rs) and

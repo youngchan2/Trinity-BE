@@ -54,7 +54,7 @@ impl KernelImplementation for PointwiseKernel {
         if let Some(loop_) = context.loops.last()
             && loop_.kind == LoopKind::Sequential
             && loop_.body.len() == 1
-            && crate::plan::accumulation_rhs(expression, &loop_.domain.variable).is_some()
+            && crate::analysis::plan::accumulation_rhs(expression, &loop_.domain.variable).is_some()
         {
             return Err(unsupported(
                 "pointwise does not implement zero-initialized accumulation",

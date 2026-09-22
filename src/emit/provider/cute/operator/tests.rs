@@ -2,7 +2,7 @@ use super::*;
 use crate::emit::native::NativeKernelProvider;
 use crate::emit::native::{Kernel, KernelBindings, SpecifiedKernel};
 use crate::emit::provider::CuTeKernelProvider;
-use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
+use crate::emit::{execution::plan_execution, native::collect::collect, prepare::prepare};
 use crate::{
     AccessIndex as I, Constant, DType, Expression as E, IndexExpr, LoopDomain, LoweringConfig,
     PhysicalPlan, PhysicalPlanBuilder, Statement, Storage, TensorAccess,
@@ -276,7 +276,7 @@ fn normalization_projects_row_vectors_and_all_ffn_operations_have_candidates() {
 
 /// Only the launch wrapper is test-specific; phase placement comes from combine.
 fn body(plan: &PhysicalPlan, source: &mut String) {
-    use crate::emit::combine::{CombinedPlan, CombinedStatement, combine};
+    use crate::emit::native::combine::{CombinedPlan, CombinedStatement, combine};
     fn walk(
         plan: &CombinedPlan<'_>,
         statements: &[CombinedStatement],
@@ -331,7 +331,7 @@ fn ffn_kernels_compile_with_nvcc() {
         normalization(DType::Fp32),
         normalization(DType::Bf16),
     ];
-    plans.extend(crate::emit::combine::tests::pipelines());
+    plans.extend(crate::emit::native::combine::tests::pipelines());
     for (i, plan) in plans.iter().enumerate() {
         let parameters = plan
             .value_instances()

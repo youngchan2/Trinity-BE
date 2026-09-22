@@ -7,7 +7,7 @@ use thiserror::Error;
 
 pub(super) mod cute;
 pub(super) mod quack;
-pub(super) mod triton;
+pub mod triton;
 pub(super) use cute::CuTeKernelProvider;
 
 /// Read-only program and loop context for kernel specification.

@@ -149,7 +149,7 @@ fn canonicalizes_branch_insertion_order_and_uses_builtin_hash() {
     let b = manual_plan(true, true, Storage::Global, false).unwrap();
     assert!(a.same_body(&b));
     assert_eq!(a.hash(), b.hash());
-    assert_eq!(a.hash(), super::plan::hash_plan(&a));
+    assert_eq!(a.hash(), super::analysis::plan::hash_plan(&a));
     assert!(
         a.statements()
             .iter()
@@ -282,7 +282,7 @@ fn reduction_destination_is_zero_initialized_even_after_an_earlier_store() {
             .unwrap();
         assert_eq!(reduction.inflows(), &[plan.inputs()[0].value()]);
         assert!(!reduction.inflows().contains(&plan.output().value()));
-        assert!(crate::plan::accumulation_rhs(reduction.expression(), "lv0").is_some());
+        assert!(crate::analysis::plan::accumulation_rhs(reduction.expression(), "lv0").is_some());
     }
 }
 

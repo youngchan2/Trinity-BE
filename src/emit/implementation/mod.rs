@@ -11,8 +11,8 @@ pub use tensor::{
     broadcast_implementations, pointwise_implementations, reduce_sum_implementations,
 };
 
-use super::TargetCapability;
 use crate::DType;
+use crate::TargetCapability;
 
 /// Built-in fusion rules are being rebuilt with the kernel provider pipeline.
 pub fn fusion_rules(_target: TargetCapability) -> &'static [&'static dyn crate::FusionRule] {

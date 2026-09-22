@@ -1,6 +1,6 @@
 //! Tensor/view dimensions and IR symbol relations, independent of a backend.
 use super::scalar::positive;
-use super::*;
+use crate::analysis::*;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]

@@ -1,25 +1,25 @@
 //! Selects one provider and one kernel specification per operation.
 
-use super::EmitError;
-use super::execution::ExecutionModel;
-use super::prepare::PreparedPlan;
-use super::provider::{KernelContext, ProviderError};
+use crate::emit::EmitError;
+use crate::emit::execution::ExecutionModel;
 use crate::emit::native::{NativeKernelProvider, SpecifiedKernel};
+use crate::emit::prepare::PreparedPlan;
+use crate::emit::provider::{KernelContext, ProviderError};
 use crate::{Loop, OperationId, Statement};
 use std::collections::BTreeMap;
 
-pub(super) struct SelectedKernels<'provider> {
+pub(in crate::emit) struct SelectedKernels<'provider> {
     pub kernels: BTreeMap<OperationId, SelectedKernel<'provider>>,
 }
 
-pub(super) struct SelectedKernel<'provider> {
+pub(in crate::emit) struct SelectedKernel<'provider> {
     /// Registry position identifies the provider independently of its name or address.
     pub provider_index: usize,
     pub provider: &'provider dyn NativeKernelProvider,
     pub specification: SpecifiedKernel,
 }
 
-pub(super) fn collect<'provider>(
+pub(in crate::emit) fn collect<'provider>(
     prepared: &PreparedPlan<'_>,
     execution: ExecutionModel,
     providers: &[&'provider dyn NativeKernelProvider],

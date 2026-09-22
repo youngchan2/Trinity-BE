@@ -1,6 +1,6 @@
 //! Ordered uses, publication and recurrence patterns, without storage decisions.
 use super::dependencies::{common_scope, same_region, tensor_loop_dependencies};
-use super::*;
+use crate::analysis::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Origin of a tensor's first value in a source kernel region. This preserves

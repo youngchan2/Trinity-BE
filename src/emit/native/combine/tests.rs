@@ -2,7 +2,7 @@ use super::*;
 use crate::emit::native::NativeKernelProvider;
 use crate::emit::native::{Kernel, KernelBindings, SpecifiedKernel};
 use crate::emit::provider::{CuTeKernelProvider, KernelContext, KernelProvider, ProviderError};
-use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
+use crate::emit::{execution::plan_execution, native::collect::collect, prepare::prepare};
 use crate::{
     AccessIndex as I, DType, Expression as E, IndexExpr, Loop, LoweringConfig, PhysicalPlanBuilder,
     TensorAccess,

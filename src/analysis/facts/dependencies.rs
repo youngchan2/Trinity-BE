@@ -1,5 +1,5 @@
 //! Queries over collected IR facts, independent of Triton storage decisions.
-use super::*;
+use crate::analysis::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn common_scope(ir: &ScheduledIr, uses: &[AccessId]) -> ScopeId {

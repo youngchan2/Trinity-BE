@@ -1,5 +1,5 @@
 use crate::DType;
-use crate::implementation::{
+use crate::emit::implementation::{
     AttributeSet, GemmImplementation, ImplementationDefinition, ImplementationId,
     ImplementationInstance,
 };

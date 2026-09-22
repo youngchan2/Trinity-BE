@@ -4,30 +4,29 @@ use crate::{CudaSource, PhysicalPlan};
 use thiserror::Error;
 
 mod candidate;
-mod collect;
-mod combine;
-mod cuda;
 mod execution;
+pub(crate) mod fusion;
+pub(crate) mod implementation;
 mod native;
 mod pattern;
 mod prepare;
-mod program;
-mod provider;
+pub(crate) mod provider;
 mod request;
+mod wrapper;
 
 pub use candidate::{
     CandidateKind, CandidateRejection, KernelCandidate, OperationCandidates, kernel_candidates,
 };
-pub use program::{PythonProgram, emit_python};
 pub use provider::quack::{QuackApi, QuackSpecification};
 pub use provider::triton::TritonSpecification;
 pub use provider::triton::{TritonKernelProvider, TritonProgram};
+pub use wrapper::{PythonProgram, emit_python};
 
 /// Emit an ordered single-GPU program through the Triton fallback provider.
 pub fn emit_triton(
     plan: &PhysicalPlan,
-    options: crate::triton::Options,
-) -> Result<String, crate::triton::Error> {
+    options: crate::emit::provider::triton::Options,
+) -> Result<String, crate::emit::provider::triton::Error> {
     Ok(TritonKernelProvider.lower_program(plan, options)?.emit())
 }
 pub use request::{KernelRequest, TensorArgument};
@@ -61,35 +60,5 @@ pub enum EmitError {
 /// Streamed execution uses one CTA per parallel coordinate. Persistent emission
 /// remains unavailable while its task and scheduler planning is rebuilt.
 pub fn emit(plan: &PhysicalPlan) -> Result<CudaSource, EmitError> {
-    if plan.world_size() != 1 {
-        return Err(EmitError::UnsupportedExecution {
-            reason: "Persistent emission is not implemented".into(),
-        });
-    }
-    if plan
-        .value_instances()
-        .any(|(_, v)| v.dtype() == crate::DType::Fp16)
-    {
-        return Err(EmitError::UnsupportedExecution {
-            reason: "native CUDA runtime supports BF16/FP32; use emit_triton for FP16".into(),
-        });
-    }
-    fn has_split(nodes: &[crate::Statement]) -> bool {
-        nodes.iter().any(|s| match s {
-            crate::Statement::Region(body) => has_split(body),
-            crate::Statement::Loop(l) => l.kind == crate::LoopKind::Split || has_split(&l.body),
-            crate::Statement::Operation(_) => false,
-        })
-    }
-    if has_split(plan.statements()) {
-        return Err(EmitError::UnsupportedExecution {
-            reason: "native CUDA split-loop composition is not implemented; use emit_triton".into(),
-        });
-    }
-    let prepared = prepare::prepare(plan)?;
-    let execution = execution::plan_execution(prepared.plan);
-    let provider = provider::CuTeKernelProvider;
-    let selected = collect::collect(&prepared, execution, &[&provider])?;
-    let combined = combine::combine(&prepared, execution, selected)?;
-    cuda::emit(prepared, &combined)
+    native::emit(plan)
 }

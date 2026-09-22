@@ -1,7 +1,7 @@
 use super::execution::{DeviceStatement, Execution, Launch};
 use crate::emit::native::bindings::BufferBindings;
 use crate::emit::{
-    EmitError, combine::CombinedPlan, native::KernelBindings, prepare::PreparedPlan,
+    EmitError, native::KernelBindings, native::combine::CombinedPlan, prepare::PreparedPlan,
 };
 use crate::{CudaSource, CudaTargetCapability};
 use serde::Serialize;
@@ -159,7 +159,7 @@ pub(super) fn render(
 
     let metadata = serde_json::to_string(&execution.requirements).map_err(failed)?;
     let context = Context {
-        abi: include_str!("../../native/abi.h"),
+        abi: include_str!("../../../native/abi.h"),
         metadata: serde_json::to_string(&metadata).map_err(failed)?,
         includes,
         kernels,

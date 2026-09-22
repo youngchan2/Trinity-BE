@@ -37,7 +37,7 @@ fn grid_decode_and_chunking_preserve_nonzero_coordinates() {
 
 #[test]
 fn existing_register_pipelines_emit_without_local_launch_slots() {
-    for plan in crate::emit::combine::tests::pipelines() {
+    for plan in crate::emit::native::combine::tests::pipelines() {
         let source = crate::emit(&plan).unwrap();
         assert_eq!(
             source.requirements().buffers.len(),

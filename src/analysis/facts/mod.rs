@@ -1,5 +1,13 @@
 //! Shared analysis results for one scheduled IR and one set of scalar bindings.
-use super::{ScheduledIr, TensorMetadata, access, flow, loops, scalar};
+pub mod access;
+pub(crate) mod dependencies;
+pub mod dtype;
+pub(super) mod flow;
+pub mod loops;
+pub mod metadata;
+pub mod scalar;
+
+use crate::analysis::{ScheduledIr, TensorMetadata};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

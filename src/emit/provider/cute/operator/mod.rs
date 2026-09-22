@@ -39,7 +39,7 @@ fn accumulation<'plan>(
         .copied()
         .filter(|l| l.kind == LoopKind::Sequential && l.body.len() == 1)
         .ok_or_else(|| unsupported("expected a single-operation sequential accumulation loop"))?;
-    let rhs = crate::plan::accumulation_rhs(expression, &loop_.domain.variable)
+    let rhs = crate::analysis::plan::accumulation_rhs(expression, &loop_.domain.variable)
         .ok_or_else(|| unsupported("expected zero-initialized accumulation"))?;
     Ok((loop_, rhs))
 }

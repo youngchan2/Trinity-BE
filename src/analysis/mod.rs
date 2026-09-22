@@ -14,29 +14,21 @@
 //! bindings, recurrence initialization and publication points. Providers retain
 //! the selected backing storage while choosing their implementation details.
 
-pub mod access;
-mod collect;
-pub(crate) mod dependencies;
-pub mod dtype;
 mod facts;
-mod flow;
 mod ir;
-pub mod loops;
-pub mod metadata;
-mod model;
-mod physical;
-pub use physical::from_physical;
-pub mod scalar;
+pub(crate) mod plan;
 pub mod storage;
 
-pub use collect::{AnalysisError, analyze, analyze_text};
+// Preserve the analysis API while grouping its implementations by responsibility.
+pub(crate) use facts::dependencies;
+pub use facts::flow::{EntryValue, KernelDataflow, TensorDataflow};
 use facts::invalid;
-pub use facts::{Bindings, ProgramFacts, ResolveError};
-pub use flow::{EntryValue, KernelDataflow, TensorDataflow};
-pub use ir::{IrNode, ParseError, SourceSpan};
-pub use metadata::TensorMetadata;
-pub use model::{
-    AccessId, AccessInfo, AccessKind, IndexDim, IndexExpr, KernelId, KernelInfo, LoopInfo,
-    ReadWrites, ScheduledIr, ScopeId, ScopeInfo, ScopeItem, ScopeKind, StatementId, StatementInfo,
-    TensorId, TensorInfo, TensorKind, ValueExpr,
+pub use facts::metadata::TensorMetadata;
+pub use facts::{Bindings, ProgramFacts, ResolveError, access, dtype, loops, metadata, scalar};
+pub use ir::ScopeItem;
+pub use ir::{
+    AccessId, AccessInfo, AccessKind, AnalysisError, IndexDim, IndexExpr, IrNode, KernelId,
+    KernelInfo, LoopInfo, ParseError, ReadWrites, ScheduledIr, ScopeId, ScopeInfo, ScopeKind,
+    SourceSpan, StatementId, StatementInfo, TensorId, TensorInfo, TensorKind, ValueExpr, analyze,
+    analyze_text, from_physical,
 };

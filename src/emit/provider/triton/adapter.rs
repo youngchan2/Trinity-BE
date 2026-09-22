@@ -1,6 +1,6 @@
 //! Operation candidates use the same typed program provider as whole programs.
+use crate::emit::provider::triton::{Error, Options, TritonPlan, invalid};
 use crate::emit::request::KernelRequest;
-use crate::triton::{Error, Options, TritonPlan, invalid};
 use crate::{PhysicalPlanBuilder, Statement, Storage};
 
 pub(super) fn lower(request: &KernelRequest) -> Result<TritonPlan, Error> {

@@ -1,6 +1,6 @@
 //! Validate scalar loop expressions separately from static tile extents.
 use super::scalar::{constant, positive};
-use super::*;
+use crate::analysis::*;
 
 pub fn validate(ir: &ScheduledIr, id: ScopeId, bindings: &Bindings) -> Result<(), ResolveError> {
     let s = ir.scope(id);

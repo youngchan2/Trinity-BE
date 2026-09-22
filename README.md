@@ -92,16 +92,16 @@ See the [architecture guide](docs/architecture/README.md) for the public API and
 | Location | Purpose |
 | --- | --- |
 | [src/analysis](src/analysis/) | Shared shape, access, scope and dataflow facts; storage inference; source collection and PhysicalPlan projection |
-| [src/triton/plan.rs](src/triton/plan.rs) | Triton program and per-kernel plans |
-| [src/triton/lowering](src/triton/lowering/) | Triton padding, SSA initialization, numerical precision, indexing and launch planning |
-| [src/triton/codegen](src/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
-| [src/plan](src/plan/) | Physical plan construction, scheduled-IR import, symbolic binding and validation |
-| [src/implementation/definitions](src/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
-| [src/emit](src/emit/) | CUDA scope collection, provider selection, kernel composition, execution placement and rendering |
+| [src/emit/provider/triton/plan.rs](src/emit/provider/triton/plan.rs) | Triton program and per-kernel plans |
+| [src/emit/provider/triton/lowering](src/emit/provider/triton/lowering/) | Triton padding, SSA initialization, numerical precision, indexing and launch planning |
+| [src/emit/provider/triton/codegen](src/emit/provider/triton/codegen/) | Triton kernel bodies and Python launch wrappers |
+| [src/analysis/plan](src/analysis/plan/) | Physical plan construction, scheduled-IR import, symbolic binding and validation |
+| [src/emit/implementation/definitions](src/emit/implementation/definitions/) | Implementation identities and candidate enumeration; no program generation |
+| [src/emit](src/emit/) | Provider candidates, backend lowering/codegen, native composition and Python program assembly |
 | [src/emit/candidate.rs](src/emit/candidate.rs) | Candidate discovery without choosing the first supported provider |
 | [src/emit/provider/quack](src/emit/provider/quack/) | Optional opaque GEMM/epilogue specifications and Python call wrappers |
 | [src/emit/provider/triton](src/emit/provider/triton/) | Whole-program fallback provider and operation adapter using the same path |
-| [src/emit/program](src/emit/program/) | Python program assembly, correctness checks, benchmarking, selection and execution |
+| [src/emit/wrapper](src/emit/wrapper/) | Python program assembly, correctness checks, benchmarking, selection and execution |
 | [src/compile/cuda](src/compile/cuda/) | NVCC compilation and artifact ownership |
 | [src/python.rs](src/python.rs) | Python compiler bindings |
 | [src/native](src/native/) | Tensor execution, NVSHMEM, and CUDA Graph runtime |

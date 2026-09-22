@@ -3,8 +3,8 @@ mod execution;
 mod render;
 mod validation;
 
-use super::{EmitError, combine::CombinedPlan, prepare::PreparedPlan};
 use crate::CudaSource;
+use crate::emit::{EmitError, native::combine::CombinedPlan, prepare::PreparedPlan};
 
 fn invalid(reason: impl Into<String>) -> EmitError {
     EmitError::InvalidExecution {
@@ -18,11 +18,11 @@ fn unsupported(reason: impl Into<String>) -> EmitError {
     }
 }
 
-pub(super) fn emit(
+pub(in crate::emit) fn emit(
     prepared: PreparedPlan<'_>,
     combined: &CombinedPlan<'_>,
 ) -> Result<CudaSource, EmitError> {
-    let bindings = super::native::bindings::build(prepared.plan)?;
+    let bindings = crate::emit::native::bindings::build(prepared.plan)?;
     let execution = execution::build(&prepared, &bindings, combined)?;
     validation::validate(prepared.plan, combined, &execution)?;
     render::render(&prepared, &bindings, combined, &execution)

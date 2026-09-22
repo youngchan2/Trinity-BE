@@ -3,8 +3,8 @@ use crate::compile::CudaRequirements;
 use crate::emit::native::bindings::BufferBindings;
 use crate::emit::{
     EmitError,
-    combine::{CombinedBody, CombinedPlan, CombinedStatement},
     execution::ExecutionModel,
+    native::combine::{CombinedBody, CombinedPlan, CombinedStatement},
     prepare::PreparedPlan,
 };
 use crate::{LoopDomain, LoopKind, TargetCapability};

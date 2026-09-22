@@ -1,6 +1,6 @@
 //! Logical views, access regions and producer coverage; no implementation layout.
 use super::scalar::{constant, loop_range, positive, product, validate_index};
-use super::*;
+use crate::analysis::*;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

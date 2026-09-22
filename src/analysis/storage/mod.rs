@@ -94,7 +94,7 @@ pub fn infer_source(
 ) -> Result<StoragePlan, ResolveError> {
     let mut metadata = TensorMetadata::collect(ir, bindings)?;
     metadata.resolve_shapes(ir, bindings)?;
-    infer(ir, bindings, &super::flow::analyze(ir))
+    infer(ir, bindings, &super::facts::flow::analyze(ir))
 }
 
 /// Consume an existing PhysicalPlan's storage contract. Explicit Global values
