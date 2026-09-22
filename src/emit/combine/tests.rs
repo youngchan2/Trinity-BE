@@ -1,8 +1,7 @@
 use super::*;
-use crate::emit::provider::{
-    CuTeKernelProvider, Kernel, KernelBindings, KernelContext, KernelProvider, ProviderError,
-    SpecifiedKernel,
-};
+use crate::emit::native::NativeKernelProvider;
+use crate::emit::native::{Kernel, KernelBindings, SpecifiedKernel};
+use crate::emit::provider::{CuTeKernelProvider, KernelContext, KernelProvider, ProviderError};
 use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
 use crate::{
     AccessIndex as I, DType, Expression as E, IndexExpr, Loop, LoweringConfig, PhysicalPlanBuilder,
@@ -252,6 +251,17 @@ impl KernelProvider for RecordingProvider {
         "recording"
     }
 
+    fn candidates(
+        &self,
+        context: &KernelContext<'_, '_>,
+    ) -> Result<Vec<crate::emit::candidate::CandidateSpecification>, ProviderError> {
+        Ok(vec![
+            crate::emit::candidate::CandidateSpecification::Native(self.specify(context)?),
+        ])
+    }
+}
+
+impl NativeKernelProvider for RecordingProvider {
     fn specify(&self, context: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError> {
         let operation = context.operation.index();
         self.specified.borrow_mut().push(operation);
@@ -686,7 +696,7 @@ fn rejects_mismatched_access_and_collective_consumption_of_register_elements() {
         if collective {
             s.requirements.thread_policy = ThreadPolicy::FullCta { threads: 128 };
         } else {
-            s.inputs[0].access.axes[0] = crate::emit::provider::access::Axis::Tile {
+            s.inputs[0].access.axes[0] = crate::emit::native::access::Axis::Tile {
                 variable: "lv0".into(),
                 width: 1,
                 clipped: false,
@@ -704,6 +714,17 @@ impl KernelProvider for FailingProvider {
     fn name(&self) -> &str {
         "failure"
     }
+    fn candidates(
+        &self,
+        context: &KernelContext<'_, '_>,
+    ) -> Result<Vec<crate::emit::candidate::CandidateSpecification>, ProviderError> {
+        Ok(vec![
+            crate::emit::candidate::CandidateSpecification::Native(self.specify(context)?),
+        ])
+    }
+}
+
+impl NativeKernelProvider for FailingProvider {
     fn specify(&self, _: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError> {
         if self.0 {
             Err(ProviderError::Failed("broken implementation".into()))

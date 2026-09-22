@@ -1,11 +1,11 @@
 //! CuTe kernel provider and operator dispatch.
 
-use super::{
-    Kernel, KernelBindings, KernelContext, KernelImplementation, KernelProvider, ProviderError,
-    SpecifiedKernel,
-};
+use super::{KernelContext, KernelProvider, ProviderError};
 use crate::TargetCapability;
 use crate::emit::execution::ExecutionModel;
+use crate::emit::native::{
+    Kernel, KernelBindings, KernelImplementation, NativeKernelProvider, SpecifiedKernel,
+};
 
 mod operator;
 pub(in crate::emit) use operator::{
@@ -19,6 +19,17 @@ impl KernelProvider for CuTeKernelProvider {
         "cute"
     }
 
+    fn candidates(
+        &self,
+        context: &KernelContext<'_, '_>,
+    ) -> Result<Vec<crate::emit::candidate::CandidateSpecification>, ProviderError> {
+        Ok(vec![
+            crate::emit::candidate::CandidateSpecification::Native(self.specify(context)?),
+        ])
+    }
+}
+
+impl NativeKernelProvider for CuTeKernelProvider {
     fn specify(&self, context: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError> {
         if context
             .prepared

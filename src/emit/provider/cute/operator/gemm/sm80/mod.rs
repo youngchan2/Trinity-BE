@@ -4,10 +4,11 @@ use super::super::{
     access::{Access, Axis},
     accumulation, unsupported,
 };
-use crate::emit::provider::{
-    Kernel, KernelBindings, KernelContext, KernelImplementation, KernelInterface, KernelPort,
-    KernelRequirements, ProviderError, RegisterLayout, SpecifiedKernel, ThreadPolicy,
+use crate::emit::native::{
+    Kernel, KernelBindings, KernelImplementation, KernelInterface, KernelPort, KernelRequirements,
+    RegisterLayout, SpecifiedKernel, ThreadPolicy,
 };
+use crate::emit::provider::{KernelContext, ProviderError};
 use crate::{CudaTargetCapability, DType, Expression, IndexExpr, Storage, TargetCapability};
 use std::collections::BTreeMap;
 

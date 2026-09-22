@@ -1,6 +1,7 @@
 use super::execution::{DeviceStatement, Execution, Launch};
+use crate::emit::native::bindings::BufferBindings;
 use crate::emit::{
-    EmitError, combine::CombinedPlan, prepare::PreparedPlan, provider::KernelBindings,
+    EmitError, combine::CombinedPlan, native::KernelBindings, prepare::PreparedPlan,
 };
 use crate::{CudaSource, CudaTargetCapability};
 use serde::Serialize;
@@ -87,6 +88,7 @@ fn device(
 
 pub(super) fn render(
     prepared: &PreparedPlan<'_>,
+    buffers: &BufferBindings,
     plan: &CombinedPlan<'_>,
     execution: &Execution<'_>,
 ) -> Result<CudaSource, EmitError> {
@@ -96,7 +98,7 @@ pub(super) fn render(
         .plan
         .value_instances()
         .filter_map(|(id, value)| {
-            prepared.bindings.slot(id).map(|slot| {
+            buffers.slot(id).map(|slot| {
                 let dtype = match value.dtype() {
                     crate::DType::Fp16 => "cutlass::half_t",
                     crate::DType::Bf16 => "cutlass::bfloat16_t",

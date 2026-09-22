@@ -1,7 +1,8 @@
 //! C++ bindings and template rendering shared by CuTe implementations.
 
 use super::access::{Access, Axis};
-use crate::emit::provider::{Kernel, KernelBindings, ProviderError};
+use crate::emit::native::{Kernel, KernelBindings};
+use crate::emit::provider::ProviderError;
 use crate::{DType, ValueInstanceId};
 use serde::Serialize;
 
@@ -21,7 +22,7 @@ pub(super) fn render_coordinate(
         .ok_or_else(|| failed(format!("missing loop binding {name}")))
 }
 
-pub(super) use crate::emit::provider::render_index_expression;
+pub(super) use crate::emit::native::render_index_expression;
 
 pub(super) fn cpp_type(dtype: DType) -> &'static str {
     match dtype {
@@ -96,7 +97,7 @@ pub(super) fn render_kernel(
 ) -> Result<Kernel, ProviderError> {
     let render = |name, template| render_template(&context, name, template);
 
-    Ok(Kernel::Native {
+    Ok(Kernel {
         includes: vec![
             "cute/tensor.hpp",
             "cutlass/bfloat16.h",
@@ -132,9 +133,9 @@ pub(super) fn render_template(
 pub(super) fn output_code(
     access: &Access,
     bindings: &KernelBindings,
-    result: crate::emit::provider::RegisterBinding,
-) -> Result<crate::emit::provider::KernelCode, ProviderError> {
-    use crate::emit::provider::KernelCode;
+    result: crate::emit::native::RegisterBinding,
+) -> Result<crate::emit::native::KernelCode, ProviderError> {
+    use crate::emit::native::KernelCode;
     let mut code = Vec::new();
     if access.storage != crate::Storage::Register {
         let target = memory_element(access, bindings, &result.coordinates)?;

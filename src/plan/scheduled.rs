@@ -54,6 +54,8 @@ impl PhysicalPlanBuilder {
             .map_err(|e| invalid(e.to_string()))?;
         let storage = a::storage::infer(ir, &config.bindings, &facts.kernels)
             .map_err(|e| invalid(e.to_string()))?;
+        let dtypes = a::dtype::resolve(ir, config.default_dtype, &config.dtypes)
+            .map_err(|e| invalid(e.to_string()))?;
         let mut b = Self::new(config.target, 1);
         let mut ids = Vec::new();
         let mut outputs = Vec::new();
@@ -62,11 +64,7 @@ impl PhysicalPlanBuilder {
             let tid = a::TensorId(i);
             let input = t.declarations.contains(&a::TensorKind::Input);
             let output = t.declarations.contains(&a::TensorKind::Output);
-            let dtype = config
-                .dtypes
-                .get(&t.name)
-                .copied()
-                .unwrap_or(config.default_dtype);
+            let dtype = dtypes[i];
             let id = b.add_named_value(
                 &t.name,
                 dtype,

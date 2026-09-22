@@ -1,6 +1,7 @@
 use super::super::access;
 use super::*;
-use crate::emit::provider::{CuTeKernelProvider, KernelProvider};
+use crate::emit::native::NativeKernelProvider;
+use crate::emit::provider::CuTeKernelProvider;
 use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
 use crate::{
     DType, IndexExpr, Loop, LoopDomain, LoweringConfig, PhysicalPlan, PhysicalPlanBuilder,
@@ -108,15 +109,12 @@ fn bindings(plan: &PhysicalPlan, prefix: &str) -> KernelBindings {
 }
 
 fn render_body(specification: &SpecifiedKernel, bindings: &KernelBindings) -> String {
-    let Kernel::Native {
+    let Kernel {
         prologue,
         mainloop,
         epilogue,
         ..
-    } = CuTeKernelProvider.render(specification, bindings).unwrap()
-    else {
-        panic!("native body")
-    };
+    } = CuTeKernelProvider.render(specification, bindings).unwrap();
     assert!(mainloop.is_none(), "pointwise has no main loop");
     format!("{{\n{}\n{}\n}}\n", prologue.source(), epilogue.source())
 }

@@ -38,7 +38,8 @@ the dtype of its temporary register representation.
 | Explicit/logically FP32 dot inputs | Existing `input_precision='ieee'` |
 | Global store and wrapper allocation | Resolved logical/storage dtype, including inter-kernel scratch |
 
-`src/triton/lowering/precision.rs` propagates logical types forward through
+`analysis::dtype::resolve` in [analysis/dtype.rs](../../src/analysis/dtype.rs)
+propagates logical types forward through
 unannotated intermediate definitions to a fixed point. Unary operations,
 reductions and views preserve their operand's logical type; binary operations
 and dots merge operand types. Recurrence inference begins without assuming a
@@ -71,12 +72,19 @@ The supported storage type set is FP16/BF16/FP32, not a general PyTorch type sys
 
 ## Provider integration boundary
 
-**Implemented for Triton:** logical-type resolution lives in
-[precision.rs](../../src/triton/lowering/precision.rs); its results are owned by
-`TritonPlan`. Explicit types from the common plan are fixed. Unannotated
-`dtype_is_explicit() == false` values are resolved here, but the provider does
-not write those results back into the supplied PhysicalPlan. Native/independent
-candidate preparation currently rejects such unresolved contracts.
+**Implemented in common planning:** logical tensor/storage types are resolved
+by `analysis::dtype::resolve` before `PhysicalPlanBuilder::from_scheduled`
+constructs the plan. `ValueInstance::dtype()` is final for every provider;
+`dtype_is_explicit() == false` describes inference provenance only. Native and
+independent candidate preparation no longer reject values merely for being inferred.
+
+Triton's program provider imports every finalized dtype and rejects conflicting
+`Options::dtypes` overrides, including inferred intermediates. Change source
+configuration and rebuild the common plan to request different logical types.
+[precision.rs](../../src/triton/lowering/precision.rs) only queries types of
+lowered inline expressions from these contracts; shared merge/cast rules come
+from `analysis::dtype`. It no longer runs tensor dtype inference. FP32 opmath,
+accumulator representation and the actual cast locations remain in Triton.
 
 **Open for cross-provider work:** CuTe Native currently emits declared-type
 rounding at some register producer/consumer boundaries, while Triton keeps
@@ -87,8 +95,9 @@ on the selected library API and has not been verified against this policy.
 Common `Storage::Register` does not establish bitwise equivalence between these
 implementations. New candidate comparisons must explicitly decide logical dtype,
 rounding boundaries and accuracy criteria before treating them as equivalent.
-Moving logical dtype resolution into common planning is a proposed integration
-step, not a completed shared API or a requirement to copy Triton-specific code.
+Sharing logical dtype resolution does not resolve those register-rounding
+choices. This refactor preserves the existing Triton numerical policy; it does
+not establish numerical equivalence with CuTe or Quack.
 
 ## Numerical limitations and previous fixes
 
@@ -130,6 +139,8 @@ claim complete equivalence with PyTorch's type system or fusion rounding.
 
 ## Validation
 
+`tests/logical_dtype.rs` verifies common inference, recurrence anchoring, explicit
+contracts/scalar defaults and provider rejection of conflicting inferred types.
 `tests/triton_precision.rs` covers half storage versus FP32 opmath, register
 assignments, cross-kernel stores, explicit FP32/cast contracts, BF16 inputs,
 inline and materialized exp-to-dot, reductions, nested dots and accumulator reuse.

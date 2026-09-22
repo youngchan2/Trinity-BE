@@ -7,7 +7,7 @@ use super::{
 use crate::emit::{
     EmitError,
     combine::CombinedPlan,
-    provider::access::{Access, Axis},
+    native::access::{Access, Axis},
 };
 use crate::{PhysicalPlan, Storage, ValueInstanceId};
 use std::collections::BTreeMap;

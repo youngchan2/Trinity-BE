@@ -60,16 +60,18 @@ Text IR 또는 `PhysicalPlanBuilder` 입력을 받아, Tensor Binding, 연산, L
 | 공개 API                    | [src/lib.rs](../../src/lib.rs)                                                                                                                       |
 | Plan 구성·확정              | [plan/builder.rs](../../src/plan/builder.rs)                                                                                                         |
 | 공통 emit·검증 진입점       | [emit/mod.rs](../../src/emit/mod.rs)                                                                                                                 |
-| 준비 결과 trait·플랫폼 분기 | [emit/prepare.rs](../../src/emit/prepare.rs)                                                                                                         |
+| 공통 후보 입력 준비 | [emit/prepare.rs](../../src/emit/prepare.rs)                                                                                                         |
 | Scheduled IR → 공통 Plan    | [plan/scheduled.rs](../../src/plan/scheduled.rs) |
 | 공통 접근·storage 분석      | [analysis/physical.rs](../../src/analysis/physical.rs), [analysis/storage/mod.rs](../../src/analysis/storage/mod.rs) |
 | 소스·자원 반환 타입         | [compile/source.rs](../../src/compile/source.rs) |
-| Native 구현 수집·자원 계약  | [emit/collect.rs](../../src/emit/collect.rs), [emit/provider/interface.rs](../../src/emit/provider/interface.rs) |
+| Native 구현 수집·자원 계약  | [emit/collect.rs](../../src/emit/collect.rs), [emit/native/interface.rs](../../src/emit/native/interface.rs) |
 | Native 본문 결합            | [emit/combine/mod.rs](../../src/emit/combine/mod.rs) |
-| Symbol·Code 표현            | [emit/provider/code.rs](../../src/emit/provider/code.rs) |
+| Symbol·Code 표현            | [emit/native/code.rs](../../src/emit/native/code.rs) |
 | 실행 방식 선택·배치 연결    | [emit/cuda/execution.rs](../../src/emit/cuda/execution.rs)                                                                                           |
 | 논리 검증                   | [emit/cuda/validation.rs](../../src/emit/cuda/validation.rs)                                                                                         |
-| Provider 계약               | [emit/provider.rs](../../src/emit/provider.rs) |
+| 공통 Provider 후보 계약     | [emit/provider.rs](../../src/emit/provider.rs) |
+| Native phase·CTA·binding 계약 | [emit/native/mod.rs](../../src/emit/native/mod.rs), [emit/native/bindings.rs](../../src/emit/native/bindings.rs) |
+| 공통 syntax / logical dtype | [analysis/ir.rs](../../src/analysis/ir.rs), [analysis/dtype.rs](../../src/analysis/dtype.rs) |
 | Triton program provider     | [emit/provider/triton/program.rs](../../src/emit/provider/triton/program.rs) |
 | Triton lowering·codegen     | [triton/lowering/mod.rs](../../src/triton/lowering/mod.rs), [triton/codegen/mod.rs](../../src/triton/codegen/mod.rs) |
 | 후보 발견·Python 실행 구성  | [emit/candidate.rs](../../src/emit/candidate.rs), [emit/program/mod.rs](../../src/emit/program/mod.rs) |

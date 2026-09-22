@@ -1,7 +1,8 @@
 use super::*;
 use crate::emit::execution::ExecutionModel;
+use crate::emit::native::NativeKernelProvider;
 use crate::emit::prepare::prepare;
-use crate::emit::provider::{CuTeKernelProvider, KernelProvider};
+use crate::emit::provider::CuTeKernelProvider;
 use crate::{
     AccessIndex as I, Expression as E, Loop, LoopDomain, LoopKind, PhysicalPlan,
     PhysicalPlanBuilder, Statement, TensorAccess,
@@ -234,17 +235,14 @@ fn double_buffering_preserves_logical_accesses_and_execution_contracts() {
         assert_eq!(spec.requirements.shared_memory_alignment, 128);
         assert_eq!(
             spec.requirements.thread_policy,
-            crate::emit::provider::ThreadPolicy::FullCta { threads: 128 }
+            crate::emit::native::ThreadPolicy::FullCta { threads: 128 }
         );
-        let Kernel::Native {
+        let Kernel {
             prologue,
             mainloop,
             epilogue,
             ..
-        } = render(&spec)
-        else {
-            panic!("native")
-        };
+        } = render(&spec);
         assert!(!prologue.source().contains("logical_k"));
         let mainloop = mainloop.unwrap().source();
         assert!(!mainloop.contains("cute::clear"));
@@ -259,15 +257,12 @@ fn cuda_source() -> String {
     );
     for (i, c) in cases().iter().enumerate() {
         let spec = specify(&c.plan(), ExecutionModel::CudaStreamed);
-        let Kernel::Native {
+        let Kernel {
             prologue,
             mainloop,
             epilogue,
             ..
-        } = render(&spec)
-        else {
-            panic!("native")
-        };
+        } = render(&spec);
         let output = if c.output_dtype == DType::Bf16 {
             "cutlass::bfloat16_t"
         } else {

@@ -2,9 +2,10 @@ use super::super::render::{
     render_bounds_predicate, render_kernel, render_origin, resolve_pointer, validate_prefix,
 };
 use super::ReduceSumSpecification;
+use crate::emit::native::{Kernel, KernelBindings};
+use crate::emit::native::{KernelCode, RegisterBinding};
+use crate::emit::provider::ProviderError;
 use crate::emit::provider::cute::operator::render::{output_code, render_template};
-use crate::emit::provider::{Kernel, KernelBindings, ProviderError};
-use crate::emit::provider::{KernelCode, RegisterBinding};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -62,8 +63,6 @@ pub(super) fn render(
         )?),
         after: include_str!("template/epilogue_end.cu.j2").into(),
     };
-    if let Kernel::Native { epilogue, .. } = &mut kernel {
-        *epilogue = code;
-    }
+    kernel.epilogue = code;
     Ok(kernel)
 }

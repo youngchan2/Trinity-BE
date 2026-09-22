@@ -54,7 +54,6 @@ pub fn emit_python(plan: &PhysicalPlan) -> Result<PythonProgram, EmitError> {
             .statements()
             .iter()
             .any(|s| !matches!(s, Statement::Operation(_)))
-        || plan.value_instances().any(|(_, v)| !v.dtype_is_explicit())
         || plan
             .operations()
             .any(|(_, op)| !supports_reference(op.expression()))

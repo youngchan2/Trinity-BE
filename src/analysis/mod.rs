@@ -17,6 +17,7 @@
 pub mod access;
 mod collect;
 pub(crate) mod dependencies;
+pub mod dtype;
 mod facts;
 mod flow;
 mod ir;

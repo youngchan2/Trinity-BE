@@ -8,10 +8,10 @@ mod collect;
 mod combine;
 mod cuda;
 mod execution;
+mod native;
 mod pattern;
 mod prepare;
 mod program;
-#[expect(dead_code)]
 mod provider;
 mod request;
 

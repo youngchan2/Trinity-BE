@@ -1,5 +1,6 @@
 use super::{invalid, unsupported};
 use crate::compile::CudaRequirements;
+use crate::emit::native::bindings::BufferBindings;
 use crate::emit::{
     EmitError,
     combine::{CombinedBody, CombinedPlan, CombinedStatement},
@@ -111,6 +112,7 @@ pub(super) fn launches(kernel: usize, blocks: u64) -> Vec<Launch> {
 
 pub(super) fn build<'a>(
     prepared: &PreparedPlan<'_>,
+    buffers: &BufferBindings,
     combined: &'a CombinedPlan<'_>,
 ) -> Result<Execution<'a>, EmitError> {
     if combined.execution != ExecutionModel::CudaStreamed {
@@ -123,7 +125,7 @@ pub(super) fn build<'a>(
 
     let TargetCapability::Cuda(target) = prepared.plan.target();
 
-    let mut buffers = prepared.bindings.requirements.clone();
+    let mut requirements = buffers.requirements.clone();
 
     for kernel in &kernels {
         if kernel.shared > target.max_shared_memory_per_cta() {
@@ -135,11 +137,10 @@ pub(super) fn build<'a>(
                 if alignment == 0 || !alignment.is_power_of_two() {
                     return Err(invalid("invalid buffer alignment"));
                 }
-                let slot = prepared
-                    .bindings
+                let slot = buffers
                     .slot(value)
                     .ok_or_else(|| invalid("memory requirement has no binding"))?;
-                buffers[slot].alignment = buffers[slot].alignment.max(alignment);
+                requirements[slot].alignment = requirements[slot].alignment.max(alignment);
             }
 
             Ok(())
@@ -155,7 +156,7 @@ pub(super) fn build<'a>(
     let requirements = CudaRequirements {
         target,
         world_size: 1,
-        buffers,
+        buffers: requirements,
         workspace_bytes: 0,
         workspace_alignment: 1,
         workspace_symmetric: false,

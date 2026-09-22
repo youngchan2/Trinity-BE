@@ -6,9 +6,6 @@ use super::{
 use crate::{CudaTargetCapability, DType, TargetCapability};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug, Clone)]
 pub struct IrConfig {
     pub target: TargetCapability,
@@ -41,44 +38,52 @@ fn error(offset: usize, message: impl Into<String>) -> IrError {
     }
 }
 
-#[derive(Clone)]
-struct Node {
-    text: Option<String>,
-    offset: usize,
-    children: Vec<Node>,
+// Reader-specific arity and atom checks over the common syntax tree. These
+// helpers interpret syntax; they do not tokenize or create a second AST.
+use crate::analysis::IrNode as Node;
+
+trait ReaderNode {
+    fn op(&self) -> &str;
+    fn text(&self) -> Option<&str>;
+    fn offset(&self) -> usize;
+    fn as_atom(&self) -> Result<&str, IrError>;
+    fn expect_args(&self, count: usize) -> Result<&[Node], IrError>;
 }
 
-impl Node {
+impl ReaderNode for Node {
     fn op(&self) -> &str {
-        self.children
-            .first()
-            .and_then(|node| node.text.as_deref())
-            .unwrap_or("")
-    }
-
-    fn atom(&self) -> Result<&str, IrError> {
-        self.text
-            .as_deref()
-            .ok_or_else(|| error(self.offset, "expected atom"))
-    }
-
-    fn args(&self, count: usize) -> Result<&[Node], IrError> {
-        if self.children.len() != count + 1 {
-            return Err(error(
-                self.offset,
-                format!("{} expects {count} arguments", self.op()),
-            ));
+        if self.args().is_some() {
+            self.head()
+        } else {
+            ""
         }
-
-        Ok(&self.children[1..])
+    }
+    fn text(&self) -> Option<&str> {
+        self.args().is_none().then(|| self.head())
+    }
+    fn offset(&self) -> usize {
+        self.span().map_or(0, |span| span.start)
+    }
+    fn as_atom(&self) -> Result<&str, IrError> {
+        self.text()
+            .ok_or_else(|| error(self.offset(), "expected atom"))
+    }
+    fn expect_args(&self, count: usize) -> Result<&[Node], IrError> {
+        self.args()
+            .filter(|args| args.len() == count)
+            .ok_or_else(|| {
+                error(
+                    self.offset(),
+                    format!("{} expects {count} arguments", self.op()),
+                )
+            })
     }
 }
 
 /// Read an explicit program, preserving its schedule and inferring value storage
 /// through the same common analysis as `PhysicalPlanBuilder::from_scheduled`.
 pub fn lower_ir(text: &str, config: &IrConfig) -> Result<Vec<PhysicalPlan>, IrError> {
-    let node = parse(text)?;
-    let ir = crate::analysis::analyze_text(text).map_err(|e| {
+    let ir = crate::analysis::analyze(parse(text)?).map_err(|e| {
         let offset = match &e {
             crate::analysis::AnalysisError::InvalidIr { span, .. } => {
                 span.as_ref().map_or(0, |s| s.start)
@@ -87,6 +92,7 @@ pub fn lower_ir(text: &str, config: &IrConfig) -> Result<Vec<PhysicalPlan>, IrEr
         };
         error(offset, e.to_string())
     })?;
+    let node = ir.ir().expect("analysis retains the parsed source");
     let mut bindings = crate::analysis::Bindings {
         shapes: BTreeMap::new(),
         symbols: config.symbols.clone(),
@@ -105,9 +111,9 @@ pub fn lower_ir(text: &str, config: &IrConfig) -> Result<Vec<PhysicalPlan>, IrEr
             .map(|(id, class)| (ir.tensor(id).name.clone(), class))
             .collect(),
     };
-    reader.collect(&node)?;
+    reader.collect(node)?;
 
-    let statements = reader.statements(&node, &BTreeSet::new(), false)?;
+    let statements = reader.statements(node, &BTreeSet::new(), false)?;
 
     let (name, output) = reader
         .output
@@ -122,69 +128,7 @@ pub fn lower_ir(text: &str, config: &IrConfig) -> Result<Vec<PhysicalPlan>, IrEr
 }
 
 fn parse(text: &str) -> Result<Node, IrError> {
-    let mut cursor = 0;
-
-    let node = parse_node(text, &mut cursor)?;
-
-    if !text[cursor..].trim().is_empty() {
-        return Err(error(cursor, "trailing input"));
-    }
-
-    Ok(node)
-}
-
-fn parse_node(text: &str, cursor: &mut usize) -> Result<Node, IrError> {
-    skip_whitespace(text, cursor, u8::is_ascii_whitespace);
-
-    let offset = *cursor;
-    match text.as_bytes().get(*cursor) {
-        Some(b'(') => {
-            let mut children = Vec::new();
-            *cursor += 1;
-
-            loop {
-                skip_whitespace(text, cursor, u8::is_ascii_whitespace);
-
-                if text.as_bytes().get(*cursor) == Some(&b')') {
-                    *cursor += 1;
-                    break;
-                }
-
-                if *cursor == text.len() {
-                    return Err(error(offset, "unclosed expression"));
-                }
-                children.push(parse_node(text, cursor)?);
-            }
-
-            if children.is_empty() {
-                return Err(error(offset, "empty expression"));
-            }
-
-            Ok(Node {
-                text: None,
-                children,
-                offset,
-            })
-        }
-        Some(b')') | None => Err(error(offset, "expected expression")),
-        Some(_) => {
-            skip_whitespace(text, cursor, |b| {
-                !b.is_ascii_whitespace() && *b != b'(' && *b != b')'
-            });
-
-            Ok(Node {
-                text: Some(text[offset..*cursor].into()),
-                children: Vec::new(),
-                offset,
-            })
-        }
-    }
-}
-
-fn skip_whitespace(text: &str, cursor: &mut usize, predicate: impl Fn(&u8) -> bool) {
-    while text.as_bytes().get(*cursor).is_some_and(&predicate) {
-        *cursor += 1;
-    }
+    Node::parse(text).map_err(|e| error(e.offset, e.message))
 }
 
 struct Reader<'a> {
@@ -214,13 +158,13 @@ pub(crate) fn parse_index(text: &str) -> Result<IndexExpr, IrError> {
 }
 
 fn index_node(node: &Node) -> Result<IndexExpr, IrError> {
-    if let Some(atom) = &node.text {
+    if let Some(atom) = node.text() {
         return Ok(atom
             .parse()
             .map(IndexExpr::Constant)
-            .unwrap_or_else(|_| IndexExpr::Variable(atom.clone())));
+            .unwrap_or_else(|_| IndexExpr::Variable(atom.to_owned())));
     }
-    let args = node.args(2)?;
+    let args = node.expect_args(2)?;
     let left = Box::new(index_node(&args[0])?);
     let right = Box::new(index_node(&args[1])?);
     Ok(match node.op() {
@@ -228,7 +172,7 @@ fn index_node(node: &Node) -> Result<IndexExpr, IrError> {
         "-" => IndexExpr::Sub(left, right),
         "*" => IndexExpr::Mul(left, right),
         "/" => IndexExpr::Div(left, right),
-        _ => return Err(error(node.offset, "unsupported index expression")),
+        _ => return Err(error(node.offset(), "unsupported index expression")),
     })
 }
 
@@ -242,56 +186,61 @@ struct Decoder<'a> {
 
 impl Decoder<'_> {
     fn integer(&self, node: &Node) -> Result<i64, IrError> {
-        let name = node.atom()?;
+        let name = node.as_atom()?;
         name.parse()
             .ok()
             .or_else(|| self.symbols.get(name).copied())
-            .ok_or_else(|| error(node.offset, format!("unresolved integer or symbol {name}")))
+            .ok_or_else(|| {
+                error(
+                    node.offset(),
+                    format!("unresolved integer or symbol {name}"),
+                )
+            })
     }
 
     fn axis(&self, node: &Node) -> Result<usize, IrError> {
         usize::try_from(self.integer(node)?)
-            .map_err(|_| error(node.offset, "axis must be nonnegative"))
+            .map_err(|_| error(node.offset(), "axis must be nonnegative"))
     }
 
     fn extent(&self, node: &Node) -> Result<usize, IrError> {
         let extent = self.integer(node)?;
         if extent <= 0 {
-            return Err(error(node.offset, "extent must be positive"));
+            return Err(error(node.offset(), "extent must be positive"));
         }
-        usize::try_from(extent).map_err(|_| error(node.offset, "extent exceeds usize"))
+        usize::try_from(extent).map_err(|_| error(node.offset(), "extent exceeds usize"))
     }
 
     fn expression(&self, node: &Node) -> Result<Expression, IrError> {
-        if let Some(atom) = &node.text {
+        if let Some(atom) = node.text() {
             let constant = if let Ok(value) = self.integer(node) {
                 Constant::Integer(value)
             } else if !self.text_ir {
                 Constant::Float32(
                     atom.parse::<f32>()
-                        .map_err(|_| error(node.offset, "invalid scalar constant"))?
+                        .map_err(|_| error(node.offset(), "invalid scalar constant"))?
                         .to_bits(),
                 )
             } else {
-                return Err(error(node.offset, format!("unresolved symbol {atom}")));
+                return Err(error(node.offset(), format!("unresolved symbol {atom}")));
             };
             return Ok(Expression::Constant(constant));
         }
         let op = node.op();
         Ok(match op {
             "load" => {
-                let args = node.args(2)?;
+                let args = node.expect_args(2)?;
                 Expression::Load(self.access(&args[0], &args[1])?)
             }
             "store" => {
-                let args = node.args(3)?;
+                let args = node.expect_args(3)?;
                 Expression::Store {
                     destination: self.access(&args[0], &args[2])?,
                     value: Box::new(self.expression(&args[1])?),
                 }
             }
             "+" | "-" | "*" | "/" | "@" => {
-                let args = node.args(2)?;
+                let args = node.expect_args(2)?;
                 let operands = Box::new([self.expression(&args[0])?, self.expression(&args[1])?]);
                 match op {
                     "+" => Expression::Add(operands),
@@ -302,7 +251,7 @@ impl Decoder<'_> {
                 }
             }
             "sqr" | "sqrt" | "sigmoid" | "relu" if op != "relu" || !self.text_ir => {
-                let args = node.args(1)?;
+                let args = node.expect_args(1)?;
                 let value = Box::new(self.expression(&args[0])?);
                 match op {
                     "sqr" => Expression::Sqr(value),
@@ -312,7 +261,7 @@ impl Decoder<'_> {
                 }
             }
             "rsum" | "bcast" | "unsqueeze" => {
-                let args = node.args(2)?;
+                let args = node.expect_args(2)?;
                 let value = Box::new(self.expression(&args[0])?);
                 let axis = self.axis(&args[1])?;
                 match op {
@@ -322,33 +271,33 @@ impl Decoder<'_> {
                 }
             }
             "float_bits" if !self.text_ir => {
-                let args = node.args(1)?;
+                let args = node.expect_args(1)?;
                 let bits = u32::try_from(self.integer(&args[0])?)
-                    .map_err(|_| error(node.offset, "invalid FP32 bits"))?;
+                    .map_err(|_| error(node.offset(), "invalid FP32 bits"))?;
                 Expression::Constant(Constant::Float32(bits))
             }
             "all_gather" if !self.text_ir => {
-                let args = node.args(5)?;
+                let args = node.expect_args(5)?;
                 Expression::AllGather {
                     source: self.access(&args[0], &args[1])?,
                     destination: self.access(&args[2], &args[3])?,
                     axis: self.axis(&args[4])?,
                 }
             }
-            _ => return Err(error(node.offset, format!("unsupported operation {op}"))),
+            _ => return Err(error(node.offset(), format!("unsupported operation {op}"))),
         })
     }
 
     fn access(&self, view: &Node, index: &Node) -> Result<TensorAccess, IrError> {
         if view.op() != "view" || index.op() != "keyed_index" {
-            return Err(error(view.offset, "expected view and keyed_index"));
+            return Err(error(view.offset(), "expected view and keyed_index"));
         }
-        let view = view.args(2)?;
+        let view = view.expect_args(2)?;
         if !matches!(view[0].op(), "input" | "output" | "tensor") || view[1].op() != "layout" {
-            return Err(error(view[0].offset, "invalid tensor view"));
+            return Err(error(view[0].offset(), "invalid tensor view"));
         }
-        let base = view[0].args(1)?;
-        let name = base[0].atom()?;
+        let base = view[0].expect_args(1)?;
+        let name = base[0].as_atom()?;
         let mut values = self
             .builder
             .values
@@ -356,19 +305,19 @@ impl Decoder<'_> {
             .filter(|(_, value)| value.name() == Some(name));
         let (id, value) = values
             .next()
-            .ok_or_else(|| error(base[0].offset, format!("unknown tensor {name}")))?;
+            .ok_or_else(|| error(base[0].offset(), format!("unknown tensor {name}")))?;
         if values.next().is_some() {
-            return Err(error(base[0].offset, format!("ambiguous tensor {name}")));
+            return Err(error(base[0].offset(), format!("ambiguous tensor {name}")));
         }
-        let layout = &view[1].children[1..];
+        let layout = view[1].args().unwrap_or_default();
         let mut slots = BTreeMap::new();
-        for slot in &index.children[1..] {
+        for slot in index.args().unwrap_or_default() {
             if slot.op() != "slot" {
-                return Err(error(slot.offset, "expected index slot"));
+                return Err(error(slot.offset(), "expected index slot"));
             }
-            let args = slot.args(2)?;
-            if slots.insert(args[0].atom()?, &args[1]).is_some() {
-                return Err(error(slot.offset, "duplicate index slot"));
+            let args = slot.expect_args(2)?;
+            if slots.insert(args[0].as_atom()?, &args[1]).is_some() {
+                return Err(error(slot.offset(), "duplicate index slot"));
             }
         }
         let mut axes = BTreeSet::new();
@@ -376,22 +325,22 @@ impl Decoder<'_> {
         let mut shape = Vec::new();
         for axis in layout {
             if axis.op() != "axis" {
-                return Err(error(axis.offset, "expected layout axis"));
+                return Err(error(axis.offset(), "expected layout axis"));
             }
-            let args = axis.args(2)?;
-            let label = args[0].atom()?;
+            let args = axis.expect_args(2)?;
+            let label = args[0].as_atom()?;
             if !axes.insert(label) {
-                return Err(error(axis.offset, "duplicate layout axis"));
+                return Err(error(axis.offset(), "duplicate layout axis"));
             }
             shape.push(self.extent(&args[1])?);
             indices.push(match slots.remove(label) {
                 None => AccessIndex::FullTile,
-                Some(index) if index.text.as_deref() == Some("fulltile") => AccessIndex::FullTile,
+                Some(index) if index.text() == Some("fulltile") => AccessIndex::FullTile,
                 Some(index) => self.access_index(index)?,
             });
         }
         if !slots.is_empty() {
-            return Err(error(index.offset, "index slot absent from view"));
+            return Err(error(index.offset(), "index slot absent from view"));
         }
         let mut access = TensorAccess::new(id, indices);
         if shape != value.shape() {
@@ -399,12 +348,12 @@ impl Decoder<'_> {
         }
         access
             .validate_view(value.shape())
-            .map_err(|e| error(view[1].offset, e))?;
+            .map_err(|e| error(view[1].offset(), e))?;
         Ok(access)
     }
 
     fn tile_width(&self, node: &Node) -> Result<TileWidth, IrError> {
-        let atom = node.atom()?;
+        let atom = node.as_atom()?;
         if super::expression::is_symbol(atom) && !self.symbols.contains_key(atom) {
             Ok(TileWidth::Symbol(atom.into()))
         } else {
@@ -417,12 +366,12 @@ impl Decoder<'_> {
             "tile" => 2,
             "clipped_tile" if !self.text_ir => 2,
             "elem" => 1,
-            _ => return Err(error(node.offset, "unsupported access index")),
+            _ => return Err(error(node.offset(), "unsupported access index")),
         };
-        let args = node.args(count)?;
-        let variable = args[0].atom()?.to_owned();
+        let args = node.expect_args(count)?;
+        let variable = args[0].as_atom()?.to_owned();
         if self.scope.is_some_and(|scope| !scope.contains(&variable)) {
-            return Err(error(node.offset, format!("unbound index {variable}")));
+            return Err(error(node.offset(), format!("unbound index {variable}")));
         }
         Ok(match node.op() {
             "tile" => AccessIndex::Tile {
@@ -440,14 +389,14 @@ impl Decoder<'_> {
 
 impl Reader<'_> {
     fn number(&self, n: &Node) -> Result<i64, IrError> {
-        let atom = n.atom()?;
+        let atom = n.as_atom()?;
         atom.parse()
             .ok()
             .or_else(|| self.config.symbols.get(atom).copied())
-            .ok_or_else(|| error(n.offset, format!("unresolved symbol {atom}")))
+            .ok_or_else(|| error(n.offset(), format!("unresolved symbol {atom}")))
     }
     fn index(&self, n: &Node, scope: &BTreeSet<String>) -> Result<IndexExpr, IrError> {
-        if let Some(a) = n.text.as_deref() {
+        if let Some(a) = n.text() {
             return if scope.contains(a)
                 || (super::expression::is_symbol(a) && !self.config.symbols.contains_key(a))
             {
@@ -456,7 +405,7 @@ impl Reader<'_> {
                 self.number(n).map(IndexExpr::Constant)
             };
         }
-        let args = n.args(2)?;
+        let args = n.expect_args(2)?;
         let a = Box::new(self.index(&args[0], scope)?);
         let b = Box::new(self.index(&args[1], scope)?);
         match n.op() {
@@ -464,54 +413,54 @@ impl Reader<'_> {
             "-" => Ok(IndexExpr::Sub(a, b)),
             "*" => Ok(IndexExpr::Mul(a, b)),
             "/" => Ok(IndexExpr::Div(a, b)),
-            _ => Err(error(n.offset, "unsupported range expression")),
+            _ => Err(error(n.offset(), "unsupported range expression")),
         }
     }
     fn collect(&mut self, n: &Node) -> Result<(), IrError> {
         if n.op() == "view" {
-            let args = n.args(2)?;
-            let base = args[0].args(1)?;
+            let args = n.expect_args(2)?;
+            let base = args[0].expect_args(1)?;
             let role = args[0].op();
             if !matches!(role, "input" | "tensor" | "output") {
-                return Err(error(n.offset, "unsupported view base"));
+                return Err(error(n.offset(), "unsupported view base"));
             }
-            let name = base[0].atom()?.to_owned();
+            let name = base[0].as_atom()?.to_owned();
             if args[1].op() != "layout" {
-                return Err(error(n.offset, "expected layout"));
+                return Err(error(n.offset(), "expected layout"));
             }
             let mut shape = Vec::new();
             let mut axes = BTreeSet::new();
-            for axis in &args[1].children[1..] {
+            for axis in args[1].args().unwrap_or_default() {
                 if axis.op() != "axis" {
-                    return Err(error(axis.offset, "expected axis"));
+                    return Err(error(axis.offset(), "expected axis"));
                 }
-                let a = axis.args(2)?;
-                if !axes.insert(a[0].atom()?) {
-                    return Err(error(axis.offset, "duplicate layout axis"));
+                let a = axis.expect_args(2)?;
+                if !axes.insert(a[0].as_atom()?) {
+                    return Err(error(axis.offset(), "duplicate layout axis"));
                 }
                 let size = self.number(&a[1])?;
                 if size <= 0 {
-                    return Err(error(axis.offset, "nonpositive tensor extent"));
+                    return Err(error(axis.offset(), "nonpositive tensor extent"));
                 }
                 shape.push(size as usize);
             }
             if !(1..=3).contains(&shape.len()) {
-                return Err(error(n.offset, "supported tensor ranks are 1, 2, 3"));
+                return Err(error(n.offset(), "supported tensor ranks are 1, 2, 3"));
             }
             if let Some((_, old_role, old_shape)) = self.tensors.get(&name) {
                 let elements =
-                    super::expression::element_count(&shape).map_err(|e| error(n.offset, e))?;
-                let old_elements =
-                    super::expression::element_count(old_shape).map_err(|e| error(n.offset, e))?;
+                    super::expression::element_count(&shape).map_err(|e| error(n.offset(), e))?;
+                let old_elements = super::expression::element_count(old_shape)
+                    .map_err(|e| error(n.offset(), e))?;
                 if old_role != role || old_elements != elements {
-                    return Err(error(n.offset, format!("inconsistent view for {name}")));
+                    return Err(error(n.offset(), format!("inconsistent view for {name}")));
                 }
             } else {
                 let dtype = *self
                     .config
                     .dtypes
                     .get(&name)
-                    .ok_or_else(|| error(n.offset, format!("missing dtype for {name}")))?;
+                    .ok_or_else(|| error(n.offset(), format!("missing dtype for {name}")))?;
                 let storage = self.storage[&name];
                 let id = self
                     .builder
@@ -521,14 +470,14 @@ impl Reader<'_> {
                 }
                 if role == "output" {
                     if self.output.is_some() {
-                        return Err(error(n.offset, "one output tensor is supported"));
+                        return Err(error(n.offset(), "one output tensor is supported"));
                     }
                     self.output = Some((name.clone(), id));
                 }
                 self.tensors.insert(name, (id, role.into(), shape));
             }
         }
-        for child in &n.children {
+        for child in n.args().unwrap_or_default() {
             self.collect(child)?;
         }
         Ok(())
@@ -551,22 +500,22 @@ impl Reader<'_> {
         match n.op() {
             "seq" => {
                 let mut out = Vec::new();
-                for child in n.args(2)? {
+                for child in n.expect_args(2)? {
                     out.extend(self.statements(child, scope, serial)?);
                 }
                 Ok(out)
             }
             "ploop" | "sloop" | "mloop" => {
                 let split = n.op() == "mloop";
-                let args = n.args(if split { 7 } else { 5 })?;
+                let args = n.expect_args(if split { 7 } else { 5 })?;
                 let parallel = n.op() != "sloop";
                 if serial && parallel {
                     return Err(error(
-                        n.offset,
+                        n.offset(),
                         "parallel work inside a sequential loop is unsupported",
                     ));
                 }
-                let variable = args[3].atom()?.to_owned();
+                let variable = args[3].as_atom()?.to_owned();
                 let domain = LoopDomain {
                     variable: variable.clone(),
                     start: self.index(&args[0], scope)?,
@@ -576,10 +525,10 @@ impl Reader<'_> {
                 let mut child_scope = scope.clone();
                 child_scope.insert(variable);
                 if split {
-                    let split_var = args[4].atom()?.to_owned();
+                    let split_var = args[4].as_atom()?.to_owned();
                     if child_scope.contains(&split_var) {
                         return Err(error(
-                            args[4].offset,
+                            args[4].offset(),
                             "split variable shadows an active loop",
                         ));
                     }
@@ -588,11 +537,11 @@ impl Reader<'_> {
                     let start = domain
                         .start
                         .evaluate(&empty)
-                        .map_err(|e| error(n.offset, e))?;
+                        .map_err(|e| error(n.offset(), e))?;
                     let stop = domain
                         .stop
                         .evaluate(&empty)
-                        .map_err(|e| error(n.offset, e))?;
+                        .map_err(|e| error(n.offset(), e))?;
                     let mut step_symbols = BTreeSet::new();
                     super::bindings::free_symbols(&domain.step, scope, &mut step_symbols);
                     let step = if step_symbols.is_empty() {
@@ -600,7 +549,7 @@ impl Reader<'_> {
                             domain
                                 .step
                                 .evaluate(&empty)
-                                .map_err(|e| error(n.offset, e))?,
+                                .map_err(|e| error(n.offset(), e))?,
                         )
                     } else {
                         None
@@ -612,7 +561,7 @@ impl Reader<'_> {
                             .is_some_and(|step| step <= 0 || ((stop - start) / count) % step != 0)
                     {
                         return Err(error(
-                            n.offset,
+                            n.offset(),
                             "mloop split must exactly divide the iteration range",
                         ));
                     }
@@ -663,20 +612,23 @@ impl Reader<'_> {
             }
             "store" => {
                 let expression = self.notation(n, scope)?;
-                let args = n.args(3)?;
-                let name = args[0].args(2)?[0].args(1)?[0].atom()?;
+                let args = n.expect_args(3)?;
+                let name = args[0].expect_args(2)?[0].expect_args(1)?[0].as_atom()?;
                 let &(output, ref role, _) = self
                     .tensors
                     .get(name)
-                    .ok_or_else(|| error(n.offset, "unknown store tensor"))?;
+                    .ok_or_else(|| error(n.offset(), "unknown store tensor"))?;
                 if role == "input" {
-                    return Err(error(n.offset, "cannot store to input"));
+                    return Err(error(n.offset(), "cannot store to input"));
                 }
                 let inflows = expression.reads();
                 let id = self.builder.add_operation(inflows, [output], expression);
                 Ok(vec![Statement::Operation(id)])
             }
-            other => Err(error(n.offset, format!("unsupported program node {other}"))),
+            other => Err(error(
+                n.offset(),
+                format!("unsupported program node {other}"),
+            )),
         }
     }
 }

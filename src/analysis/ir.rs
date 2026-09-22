@@ -7,11 +7,11 @@ pub struct SourceSpan {
     pub end: usize,
 }
 
-/// Small syntax adapter for the postprocessed S-expression dialect.
+/// Shared syntax tree for scheduled/explicit IR and Builder expressions.
 ///
 /// Expressions are retained without arithmetic rewrites. This is not a second
-/// optimizer IR or an e-graph: callers can construct nodes directly, and the text
-/// reader is useful for the existing Python backend's corpus.
+/// optimizer IR or an e-graph. Readers interpret the same parsed syntax with
+/// their own semantic rules; callers can also construct nodes directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrNode {
     head: String,

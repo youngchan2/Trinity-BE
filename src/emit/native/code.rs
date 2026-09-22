@@ -1,7 +1,8 @@
 //! Native code with lexical output slots; no parsing of generated CUDA is required.
 
-use super::{KernelBindings, ProviderError};
+use super::KernelBindings;
 use crate::IndexExpr;
+use crate::emit::provider::ProviderError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::emit) struct RegisterBinding {
@@ -36,6 +37,7 @@ impl From<String> for KernelCode {
 
 impl KernelCode {
     /// Render an unconnected body. Output slots are empty unless a continuation is supplied.
+    #[cfg(test)]
     pub fn source(&self) -> String {
         self.connect(&mut |_, _| Ok(String::new()))
             .expect("empty continuation")
@@ -43,8 +45,8 @@ impl KernelCode {
 
     pub fn connect(
         &self,
-        output: &mut impl FnMut(usize, &RegisterBinding) -> Result<String, super::ProviderError>,
-    ) -> Result<String, super::ProviderError> {
+        output: &mut impl FnMut(usize, &RegisterBinding) -> Result<String, ProviderError>,
+    ) -> Result<String, ProviderError> {
         Ok(match self {
             Self::Text(text) => text.clone(),
             Self::Sequence(nodes) => {

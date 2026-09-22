@@ -1,6 +1,6 @@
 //! CuTe operator implementations and their specifications.
 
-use crate::emit::provider::access;
+use crate::emit::native::access;
 mod gemm;
 mod pointwise;
 mod reduce_sum;

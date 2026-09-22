@@ -10,7 +10,7 @@ use super::{
     Input, Kernel, KernelBindings, PointwiseSpecification, ProviderError, VALUES_PER_THREAD, add,
     div, mul, special, sqr, sqrt, sub,
 };
-use crate::emit::provider::{KernelCode, RegisterBinding};
+use crate::emit::native::{KernelCode, RegisterBinding};
 use crate::{Constant, Expression, Storage};
 use serde::Serialize;
 
@@ -281,24 +281,22 @@ pub(super) fn render(
         })
         .collect();
     let mut kernel = render_kernel(&context, include_str!("template/prologue.cu.j2"), None, "")?;
-    if let Kernel::Native { epilogue, .. } = &mut kernel {
-        *epilogue = KernelCode::Scope {
-            before: render_template(
-                &context,
-                "epilogue",
-                include_str!("template/epilogue.cu.j2"),
-            )?,
-            body: Box::new(output_code(
-                &specification.output,
-                bindings,
-                RegisterBinding {
-                    value: format!("{prefix}_result"),
-                    coordinates,
-                },
-            )?),
-            after: include_str!("template/epilogue_end.cu.j2").into(),
-        };
-    }
+    kernel.epilogue = KernelCode::Scope {
+        before: render_template(
+            &context,
+            "epilogue",
+            include_str!("template/epilogue.cu.j2"),
+        )?,
+        body: Box::new(output_code(
+            &specification.output,
+            bindings,
+            RegisterBinding {
+                value: format!("{prefix}_result"),
+                coordinates,
+            },
+        )?),
+        after: include_str!("template/epilogue_end.cu.j2").into(),
+    };
     Ok(kernel)
 }
 
@@ -356,19 +354,17 @@ fn render_element(
         output_type: cpp_type(spec.output.dtype),
     };
     let mut kernel = render_kernel(&context, "", None, "")?;
-    if let Kernel::Native { epilogue, .. } = &mut kernel {
-        *epilogue = KernelCode::Scope {
-            before: render_template(&context, "element", include_str!("template/element.cu.j2"))?,
-            body: Box::new(output_code(
-                &spec.output,
-                bindings,
-                RegisterBinding {
-                    value: format!("{prefix}_result"),
-                    coordinates: coordinates.clone(),
-                },
-            )?),
-            after: "}\n".into(),
-        };
-    }
+    kernel.epilogue = KernelCode::Scope {
+        before: render_template(&context, "element", include_str!("template/element.cu.j2"))?,
+        body: Box::new(output_code(
+            &spec.output,
+            bindings,
+            RegisterBinding {
+                value: format!("{prefix}_result"),
+                coordinates: coordinates.clone(),
+            },
+        )?),
+        after: "}\n".into(),
+    };
     Ok(kernel)
 }

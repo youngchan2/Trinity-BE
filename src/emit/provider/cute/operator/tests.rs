@@ -1,7 +1,7 @@
 use super::*;
-use crate::emit::provider::{
-    CuTeKernelProvider, Kernel, KernelBindings, KernelProvider, SpecifiedKernel,
-};
+use crate::emit::native::NativeKernelProvider;
+use crate::emit::native::{Kernel, KernelBindings, SpecifiedKernel};
+use crate::emit::provider::CuTeKernelProvider;
 use crate::emit::{collect::collect, execution::plan_execution, prepare::prepare};
 use crate::{
     AccessIndex as I, Constant, DType, Expression as E, IndexExpr, LoopDomain, LoweringConfig,
@@ -183,19 +183,16 @@ fn gemm_support_and_requirements_preserve_logical_k_accesses() {
             assert_eq!(spec.requirements.shared_memory_alignment, 128);
             assert_eq!(
                 spec.requirements.thread_policy,
-                crate::emit::provider::ThreadPolicy::FullCta { threads: 128 }
+                crate::emit::native::ThreadPolicy::FullCta { threads: 128 }
             );
-            let Kernel::Native {
+            let Kernel {
                 prologue,
                 mainloop,
                 epilogue,
                 ..
             } = CuTeKernelProvider
                 .render(&specs[0], &bindings(&plan))
-                .unwrap()
-            else {
-                panic!("native")
-            };
+                .unwrap();
             assert!(prologue.source().contains("cute::clear(body_accumulator)"));
             assert!(
                 !prologue.source().contains("lv0"),
@@ -236,17 +233,14 @@ fn reduction_retains_fp32_state_across_tiles() {
         assert!(spec.square);
         assert_eq!(spec.output.dtype, DType::Fp32);
         assert_eq!(spec.requirements.shared_memory_bytes, 0);
-        let Kernel::Native {
+        let Kernel {
             prologue,
             mainloop,
             epilogue,
             ..
         } = CuTeKernelProvider
             .render(&specs[0], &bindings(&plan))
-            .unwrap()
-        else {
-            panic!("native")
-        };
+            .unwrap();
         assert!(prologue.source().contains("float body_accumulator[2] = {}"));
         assert!(!prologue.source().contains("lv0"));
         let mainloop = mainloop.unwrap().source();
@@ -267,14 +261,11 @@ fn normalization_projects_row_vectors_and_all_ffn_operations_have_candidates() {
     assert_eq!(spec.inputs.len(), 2);
     assert!(!spec.inputs[0].broadcast);
     assert!(spec.inputs[1].broadcast);
-    let Kernel::Native {
+    let Kernel {
         prologue, mainloop, ..
     } = CuTeKernelProvider
         .render(&specs[0], &bindings(&plan))
-        .unwrap()
-    else {
-        panic!("native")
-    };
+        .unwrap();
     assert!(mainloop.is_none());
     assert!(
         prologue

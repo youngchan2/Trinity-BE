@@ -70,7 +70,16 @@ fn lower_impl(
             )));
         }
     }
-    let dtypes = precision::resolve(&analysis, &expressions, &options);
+    let dtypes =
+        analysis
+            .tensors()
+            .iter()
+            .map(|tensor| {
+                options.dtypes.get(&tensor.name).copied().ok_or_else(|| {
+                    invalid(format!("missing PhysicalPlan dtype for {}", tensor.name))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
     let mut plan = TritonPlan {
         analysis,
         common,

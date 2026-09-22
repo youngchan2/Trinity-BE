@@ -22,9 +22,10 @@ pub(super) fn emit(
     prepared: PreparedPlan<'_>,
     combined: &CombinedPlan<'_>,
 ) -> Result<CudaSource, EmitError> {
-    let execution = execution::build(&prepared, combined)?;
+    let bindings = super::native::bindings::build(prepared.plan)?;
+    let execution = execution::build(&prepared, &bindings, combined)?;
     validation::validate(prepared.plan, combined, &execution)?;
-    render::render(&prepared, combined, &execution)
+    render::render(&prepared, &bindings, combined, &execution)
 }
 
 #[cfg(test)]

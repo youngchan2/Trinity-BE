@@ -33,17 +33,18 @@ Neither source generation entry queries a GPU.
 
 | Layer | Information |
 | --- | --- |
-| `plan/` | Value identity, allocation/ABI shape, backing storage class, explicit storage dtype, per-access view shape and symbolic dimensions, indices, expressions, ordered regions and loops, inputs/outputs, input mutation and initial recurrence seeds |
-| `analysis/` | Logical access ranges, lexical scopes, producer/read relationships, recurrence and coverage facts derived from the common program |
+| `plan/` | Value identity, allocation/ABI shape, backing storage class, finalized logical/storage dtype, per-access view shape and symbolic dimensions, indices, expressions, ordered regions and loops, inputs/outputs, input mutation and initial recurrence seeds |
+| `analysis/` | Common syntax parsing, logical dtype inference, logical access ranges, lexical scopes, producer/read relationships, recurrence and coverage facts derived from the common program |
 | `analysis/storage/` | Common backing-storage inference, materialization requirements, local read bindings, recurrence initialization and publication scope |
 | `emit/provider/triton/` | Accept/reject the plan's storage/dtype contracts; pass shared facts into Triton lowering; preserve ABI output order |
-| `triton/lowering/` | Padded tile shapes, Triton SSA incoming-value initialization, accumulator representation, inferred numerical precision, grids and autotuning configurations |
+| `triton/lowering/` | Padded tile shapes, Triton SSA incoming-value initialization, accumulator representation, FP32 opmath/cast implementation, grids and autotuning configurations |
 | `triton/codegen/` | Triton expressions, load/store offsets and masks, loop bodies, kernels, scratch allocation and launch wrapper |
 
-Unannotated source intermediates have `dtype_is_explicit() == false`. Their
-sample dtype is not a final storage contract. Triton resolves their logical/storage types separately from FP32
-register computation (see [precision](triton-precision.md)); native/independent-operation providers reject unresolved storage
-types rather than silently treating them as an explicit 16-bit boundary.
+Unannotated source intermediates have `dtype_is_explicit() == false`, but their
+`dtype()` is already finalized by common analysis. This flag records provenance,
+not unresolved state. Triton consumes all plan dtypes and rejects conflicting
+overrides; only register/opmath/cast implementation remains provider-specific
+(see [precision](triton-precision.md)).
 
 The common plan stores typed expressions, not a duplicate source AST or a
 Triton plan. `analysis::from_physical` builds scope/access tables directly.
@@ -134,11 +135,11 @@ These are separate implemented entry paths, not one integrated autotuner:
 | --- | --- | --- |
 | `TritonKernelProvider::lower_source/lower_program`, `emit_triton` | Whole scheduled program → `TritonPlan` → kernel source + ordered `forward` | Direct fallback, no other provider comparison |
 | `kernel_candidates` | One `OperationId` in its loop context → alternatives/rejections | Discovery only; no import, compilation or benchmark |
-| `emit_python` independent-operation path | Loop-free, single-output, explicit-dtype full-memory operations with supported reference | Python source can compare executable Triton/Quack candidates |
+| `emit_python` independent-operation path | Loop-free, single-output, resolved-dtype full-memory operations with supported reference | Python source can compare executable Triton/Quack candidates |
 | Native `emit` | Supported CuTe operations → combined CUDA bodies → `CudaSource` | Current native priority selection; no Triton/Quack timing comparison |
 
 `emit_python` switches to the whole-program Triton path for regions/loops,
-multiple outputs, input mutation, unresolved dtype contracts, or expressions
+multiple outputs, input mutation, or expressions
 unsupported by its independent PyTorch reference. Its `comparison: not_performed`
 report is intentional; `prepare` in that path does not certify accuracy.
 
@@ -210,10 +211,13 @@ Reuse common `PhysicalPlan` expressions/accesses and the APIs in
 once the plan owns those expressions. Backend-specific layout/code is not
 available from `ValueInstance.storage` alone.
 
-The in-crate `KernelProvider`/`KernelContext` traits and native
-`SpecifiedKernel`/`KernelInterface` contracts are defined in
-[provider.rs](../../src/emit/provider.rs) and
-[interface.rs](../../src/emit/provider/interface.rs). They are not a public
+The in-crate `KernelProvider`/`KernelContext` in
+[provider.rs](../../src/emit/provider.rs) provide candidate discovery without
+native rendering requirements. `NativeKernelProvider`, `SpecifiedKernel`,
+phase code, CTA requirements and register bindings are owned by
+[native/mod.rs](../../src/emit/native/mod.rs) and
+[native/interface.rs](../../src/emit/native/interface.rs). Triton/Quack opaque
+providers implement only the common discovery trait. These are not a public
 third-party plugin ABI. Adding provider variants/registration still modifies the
 crate's emission pipeline. `KernelCandidate` currently covers exactly one
 operation; it does not yet express a multi-operation GEMM+epilogue region.
@@ -221,8 +225,10 @@ operation; it does not yet express a multi-operation GEMM+epilogue region.
 [KernelRequest](../../src/emit/request.rs) is the independent host-call boundary:
 it retains the operation expression and tensor IDs/types/shapes, but currently
 accepts only single-GPU, loop-free, positive full-tensor External/Global accesses
-and non-in-place outputs. Native/candidate preparation rejects unresolved dtype
-contracts before discovery. General region/loop coverage and CTA-local register
+and non-in-place outputs. Common preparation checks bound configuration symbols;
+it does not build CUDA buffers or impose native output/mutation limits. Native
+ABI restrictions and buffer slots are prepared only in the CUDA emission path.
+General region/loop coverage and CTA-local register
 ports require further integration, not a parallel copy of Triton's analyzer.
 
 The current [Quack adapter](../../src/emit/provider/quack/mod.rs) recognizes one
@@ -239,7 +245,6 @@ and resource placement. It is not automatically launchable through
 `KernelCandidate::emit_python`, which returns no wrapper for Native fragments.
 See [Emission](emission.md) for that path.
 
-**Open integration decisions:** common resolution of unannotated dtypes;
-region/multiple-operation candidate coverage; Native-versus-Triton rounding and
+**Open integration decisions:** region/multiple-operation candidate coverage; Native-versus-Triton rounding and
 reference tolerances; library stride/layout/workspace adaptation; combined
 Native/Opaque execution and benchmark selection. These are not completed APIs.

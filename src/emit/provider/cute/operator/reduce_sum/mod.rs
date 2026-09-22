@@ -1,13 +1,13 @@
 //! Row-wise FP32 accumulation across a sequential loop.
 
 use crate::Storage;
-use crate::emit::provider::{KernelInterface, KernelPort, RegisterLayout};
+use crate::emit::native::{KernelInterface, KernelPort, RegisterLayout};
 
 use super::{access::Access, accumulation, unsupported};
-use crate::emit::provider::{
-    Kernel, KernelBindings, KernelContext, KernelImplementation, KernelRequirements, ProviderError,
-    SpecifiedKernel, ThreadPolicy,
+use crate::emit::native::{
+    Kernel, KernelBindings, KernelImplementation, KernelRequirements, SpecifiedKernel, ThreadPolicy,
 };
+use crate::emit::provider::{KernelContext, ProviderError};
 use crate::{DType, Expression};
 
 mod render;

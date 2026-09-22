@@ -1,7 +1,8 @@
 use super::*;
 use crate::emit::execution::ExecutionModel;
+use crate::emit::native::NativeKernelProvider;
 use crate::emit::prepare::prepare;
-use crate::emit::provider::{CuTeKernelProvider, KernelProvider};
+use crate::emit::provider::CuTeKernelProvider;
 use crate::{
     AccessIndex as I, AsStr, Expression as E, Loop, LoopDomain, LoopKind, PhysicalPlan,
     PhysicalPlanBuilder, Statement, TensorAccess,
@@ -279,14 +280,14 @@ fn supported_tiles_preserve_accumulation_and_resource_contracts() {
                 assert_eq!(spec.requirements.shared_memory_alignment, 128);
                 assert_eq!(
                     spec.requirements.thread_policy,
-                    crate::emit::provider::ThreadPolicy::FullCta { threads: 128 }
+                    crate::emit::native::ThreadPolicy::FullCta { threads: 128 }
                 );
                 assert_eq!(spec.requirements.alignments[0], (spec.lhs.value, 16));
                 assert_eq!(
                     spec.interface().iteration.as_deref(),
                     Some(spec.iteration.as_str())
                 );
-                let Kernel::Native {
+                let Kernel {
                     prologue,
                     mainloop,
                     epilogue,
@@ -296,10 +297,7 @@ fn supported_tiles_preserve_accumulation_and_resource_contracts() {
                         &SpecifiedKernel::CuTeSm80Gemm(spec.clone()),
                         &bindings(&p, &spec),
                     )
-                    .unwrap()
-                else {
-                    panic!("native")
-                };
+                    .unwrap();
                 assert!(!prologue.source().contains("logical_k"));
                 let mainloop = mainloop.unwrap().source();
                 assert!(!mainloop.contains("cute::clear"));
@@ -415,10 +413,7 @@ fn register_output_converts_before_continuation_and_bindings_are_required() {
     let mut binding = bindings(&p, &spec);
     binding.values.remove(&spec.output.value);
     let candidate = SpecifiedKernel::CuTeSm80Gemm(spec.clone());
-    let Kernel::Native { epilogue, .. } = CuTeKernelProvider.render(&candidate, &binding).unwrap()
-    else {
-        panic!("native")
-    };
+    let Kernel { epilogue, .. } = CuTeKernelProvider.render(&candidate, &binding).unwrap();
     let mut calls = 0;
     let source = epilogue
         .connect(&mut |port, element| {
@@ -531,7 +526,7 @@ fn cuda_source() -> String {
     for (i, c) in numerical_cases().iter().enumerate() {
         let p = plan(c);
         let spec = specification(&p);
-        let Kernel::Native {
+        let Kernel {
             prologue,
             mainloop,
             epilogue,
@@ -541,10 +536,7 @@ fn cuda_source() -> String {
                 &SpecifiedKernel::CuTeSm80Gemm(spec.clone()),
                 &bindings(&p, &spec),
             )
-            .unwrap()
-        else {
-            panic!("native")
-        };
+            .unwrap();
         let output = if c.output_dtype == DType::Bf16 {
             "cutlass::bfloat16_t"
         } else {

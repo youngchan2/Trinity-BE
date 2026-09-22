@@ -1,7 +1,8 @@
 //! Rendering of decided phase placement and register connections.
 use super::{CombinedBody, CombinedPlan};
-use crate::emit::provider::render_index_expression;
-use crate::emit::provider::{Kernel, KernelBindings, ProviderError, RegisterBinding, ThreadPolicy};
+use crate::emit::native::render_index_expression;
+use crate::emit::native::{Kernel, KernelBindings, RegisterBinding, ThreadPolicy};
+use crate::emit::provider::ProviderError;
 use crate::{LoopDomain, OperationId};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -89,15 +90,12 @@ fn render_pipeline(
             format!("{}_{}", local.prefix, domain.variable),
         );
     }
-    let Kernel::Native {
+    let Kernel {
         includes: headers,
         prologue,
         mainloop,
         epilogue,
-    } = kernel.provider.render(specification, &local)?
-    else {
-        return Err(failed("Opaque bodies cannot enter native composition"));
-    };
+    } = kernel.provider.render(specification, &local)?;
     includes.extend(headers);
     let reject_output =
         &mut |_, _: &RegisterBinding| Err(failed("output slot must occur in epilogue"));

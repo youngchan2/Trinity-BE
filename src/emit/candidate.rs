@@ -5,9 +5,8 @@ use super::execution::plan_execution;
 use super::prepare::{PreparedPlan, prepare};
 use super::provider::quack::{QuackKernelProvider, QuackSpecification};
 use super::provider::triton::{TritonKernelProvider, TritonSpecification};
-use super::provider::{
-    CuTeKernelProvider, KernelContext, KernelProvider, ProviderError, SpecifiedKernel,
-};
+use super::provider::{CuTeKernelProvider, KernelContext, KernelProvider, ProviderError};
+use crate::emit::native::SpecifiedKernel;
 use crate::{Loop, OperationId, PhysicalPlan, Statement};
 use std::collections::BTreeMap;
 

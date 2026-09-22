@@ -1,16 +1,16 @@
 //! BF16 Hopper WGMMA with two shared-memory stages.
 
 use crate::Storage;
-use crate::emit::provider::{KernelInterface, KernelPort, RegisterLayout};
+use crate::emit::native::{KernelInterface, KernelPort, RegisterLayout};
 
 use super::super::{
     access::{Access, Axis},
     accumulation, unsupported,
 };
-use crate::emit::provider::{
-    Kernel, KernelBindings, KernelContext, KernelImplementation, KernelRequirements, ProviderError,
-    SpecifiedKernel, ThreadPolicy,
+use crate::emit::native::{
+    Kernel, KernelBindings, KernelImplementation, KernelRequirements, SpecifiedKernel, ThreadPolicy,
 };
+use crate::emit::provider::{KernelContext, ProviderError};
 use crate::{CudaTargetCapability, DType, Expression, IndexExpr, TargetCapability};
 use std::collections::BTreeMap;
 

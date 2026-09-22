@@ -3,7 +3,8 @@
 use super::EmitError;
 use super::execution::ExecutionModel;
 use super::prepare::PreparedPlan;
-use super::provider::{KernelContext, KernelProvider, ProviderError, SpecifiedKernel};
+use super::provider::{KernelContext, ProviderError};
+use crate::emit::native::{NativeKernelProvider, SpecifiedKernel};
 use crate::{Loop, OperationId, Statement};
 use std::collections::BTreeMap;
 
@@ -14,14 +15,14 @@ pub(super) struct SelectedKernels<'provider> {
 pub(super) struct SelectedKernel<'provider> {
     /// Registry position identifies the provider independently of its name or address.
     pub provider_index: usize,
-    pub provider: &'provider dyn KernelProvider,
+    pub provider: &'provider dyn NativeKernelProvider,
     pub specification: SpecifiedKernel,
 }
 
 pub(super) fn collect<'provider>(
     prepared: &PreparedPlan<'_>,
     execution: ExecutionModel,
-    providers: &[&'provider dyn KernelProvider],
+    providers: &[&'provider dyn NativeKernelProvider],
 ) -> Result<SelectedKernels<'provider>, EmitError> {
     let mut kernels = BTreeMap::new();
     visit(
@@ -38,7 +39,7 @@ pub(super) fn collect<'provider>(
 fn visit<'plan, 'provider>(
     prepared: &PreparedPlan<'plan>,
     execution: ExecutionModel,
-    providers: &[&'provider dyn KernelProvider],
+    providers: &[&'provider dyn NativeKernelProvider],
     statements: &'plan [Statement],
     loops: &mut Vec<&'plan Loop>,
     kernels: &mut BTreeMap<OperationId, SelectedKernel<'provider>>,
@@ -70,7 +71,7 @@ fn visit<'plan, 'provider>(
 
 fn select<'provider>(
     context: &KernelContext<'_, '_>,
-    providers: &[&'provider dyn KernelProvider],
+    providers: &[&'provider dyn NativeKernelProvider],
 ) -> Result<SelectedKernel<'provider>, EmitError> {
     let mut reasons = Vec::new();
     for (provider_index, &provider) in providers.iter().enumerate() {

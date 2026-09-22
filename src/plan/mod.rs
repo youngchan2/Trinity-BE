@@ -166,6 +166,8 @@ impl ValueInstance {
     pub fn dimensions(&self) -> Option<&[IndexExpr]> {
         self.dimensions.as_deref()
     }
+    /// Provenance only: false means inferred, not unresolved. `dtype()` is
+    /// finalized by common analysis before any provider receives this plan.
     pub fn dtype_is_explicit(&self) -> bool {
         self.dtype_explicit
     }

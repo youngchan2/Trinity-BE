@@ -1,7 +1,7 @@
 # Planning: 공통 IR 정보와 PhysicalPlan
 
 2026-09-22 기준 공통 plan과 storage 분석의 구현을 설명한다.
-계약 검증은 `tests/common_storage.rs`, `tests/plan_access.rs`에서 확인할 수 있다.
+계약 검증은 `tests/common_storage.rs`, `tests/plan_access.rs`, `tests/logical_dtype.rs`에서 확인할 수 있다.
 이 문서는 공통 정보의 원본이며, Triton 구현 경로는 [provider](triton-provider.md),
 수치 구현은 [precision](triton-precision.md), 후보·조합은 [emission](emission.md)이 원본이다.
 
@@ -21,6 +21,26 @@
 `from_scheduled`는 제공된 shape/symbol binding으로 공통 facts를 확정한다.
 Triton의 `lower_source` 편의 진입점은 그 전에 provider의 기본 tile 값을 정해 전달한다.
 공통 builder 자체가 backend 성능 후보나 최적 tile을 선택하는 것은 아니다.
+
+텍스트 syntax는 [analysis/ir.rs](../../src/analysis/ir.rs)의 `IrNode::parse` 한 곳에서 처리한다.
+explicit `lower_ir`는 한 번 파싱한 AST를 공통 수집과 Reader가 함께 사용한다.
+Python Builder의 expression/index 문자열도 같은 parser를 사용한다. 주석, source span,
+중첩 제한과 syntax 오류 위치가 공유되지만, 각 Reader의 지원 연산·arity·의미 해석은 유지한다.
+Parser 통합이 explicit Reader의 extended IR 지원 범위를 넓힌다는 뜻은 아니다.
+
+### Logical dtype 확정
+
+[analysis/dtype.rs](../../src/analysis/dtype.rs)의 `analysis::dtype::resolve`가
+scheduled source의 logical/storage dtype을 확정하고 `from_scheduled`가 각
+`ValueInstance::dtype()`에 기록한다. 입력/출력 기본값과 명시 override가 전파의 기준이며,
+미명시 중간값은 operand type을 따라 fixed point로 계산한다. scalar-only producer는
+기준 operand가 없으면 default를 받은 뒤 소비자까지 다시 전파한다. recurrence를 처음부터
+FP16으로 가정해 BF16과 잘못 섞지 않는다. exp/reduction의 FP32 계산은 storage 승격 근거가 아니다.
+
+`dtype_is_explicit() == false`는 **추론된 값이라는 provenance**다. 미해결 dtype 표식이 아니다.
+모든 provider는 이미 확정된 `dtype()`를 받는다. 직접 Builder/explicit Reader의 명시 계약도
+계속 유지한다. FP32 opmath, GEMM operand 변환과 accumulator, cast 위치는 provider의
+구현 책임이며 [precision 경계](triton-precision.md#provider-integration-boundary)를 따른다.
 
 ## PhysicalPlan이 소유하는 정보
 
@@ -145,7 +165,7 @@ Triton이 loop 밖 SSA 사용을 위해 추가하는 incoming-value 초기화나
 | 공통에서 받는 것 | Provider가 결정·검증할 것 |
 | --- | --- |
 | 원래 expression·region·loop·접근 view/indices | 맡을 operation/region 범위, 지원 여부, 실행 순서 보존 |
-| 명시 dtype와 backing storage | register 계산 타입, cast 위치, 실제 operand/accumulator type; [수치 경계](triton-precision.md#provider-integration-boundary) |
+| 확정된 logical/storage dtype와 backing storage | register 계산 타입, cast 위치, 실제 operand/accumulator type; [수치 경계](triton-precision.md#provider-integration-boundary) |
 | Local producer/read 및 publication | thread-to-element mapping, layout 호환, barrier/pipeline |
 | Symbolic tile와 target | 허용 tile·instruction·resource 조건, binding/config/launch |
 | ABI 입출력과 mutation | library 호출 인자, stride/alignment, workspace, output alias 제한 |
@@ -156,8 +176,6 @@ CuTe는 내부 `KernelContext`와 Native 명세/조합을 사용한다. 이들�
 
 ## 아직 확정되지 않은 확장
 
-- unannotated source의 최종 logical dtype을 공통 typed plan에 확정해서 모든 provider에 전달하는 위치/API.
-  현재 Triton의 해결 결과는 `TritonPlan`에 있고 원래 PhysicalPlan을 갱신하지 않는다.
 - 여러 operation/loop/region을 하나의 GEMM+epilogue candidate로 묶는 coverage 계약.
 - Native와 Triton의 register 경계 rounding 차이에 대한 공통 수치 비교 기준.
 - Shared 전달, 일반 alias/value-version 분석, Native/opaque의 통합 compile·benchmark·선택.

@@ -1,11 +1,10 @@
-//! Resolved tensor accesses used by kernel interfaces.
+//! Native port/access representation derived from common TensorAccess contracts.
 
-use super::ProviderError;
+use crate::emit::provider::{KernelContext, ProviderError};
 
 fn unsupported(message: &str) -> ProviderError {
     ProviderError::Unsupported(message.into())
 }
-use crate::emit::provider::KernelContext;
 use crate::{AccessIndex, DType, IndexExpr, Storage, TensorAccess, TileWidth, ValueInstanceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

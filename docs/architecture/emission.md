@@ -103,10 +103,20 @@ GEMM의 CTA barrier를 부분 그룹 barrier로 자동 치환하거나 thread �
 
 ![KernelProvider의 후보 명세 생성과 렌더링 구조](../images/trinity-lowering-kernel-provider.svg)
 
-KernelProvider의 `candidates()`는 Operation 문맥에 대한 후보들을 제공한다. Native의 `specify()`는 지원하는 명세 하나를 제공하며 기본 `candidates()`가 이를 감싼다.
-구현 선택과 소유는 Emit의 책임이며 IR Reader와 `PhysicalPlanBuilder`는 구현을 선택하지 않는다.
-`specify()`는 단일 `SpecifiedKernel` 또는 미지원·오류를 반환하고, `render()`는 해당 명세를
-커널 본문으로 렌더링한다. Provider 내부의 구현체도 같은 단일 명세 계약을 사용한다.
+[공통 `KernelProvider`](../../src/emit/provider.rs)는 `name()`과 `candidates()`만 요구한다.
+Triton·Quack의 opaque 후보는 Native phase/layout/CTA binding 계약을 구현하지 않는다.
+
+[`NativeKernelProvider`](../../src/emit/native/mod.rs)는 이와 별도의 Native 조합 능력이다.
+`specify()`가 단일 `SpecifiedKernel` 또는 미지원·오류를 반환하고, `render()`는 확정된
+`KernelBindings`로 prologue/mainloop/epilogue를 생성한다. 반환 타입 `native::Kernel`은
+Native phase만 담으며 Opaque placeholder가 없다. CuTe는 두 trait을 모두 구현하고
+`candidates()`에서 자신의 Native 명세를 후보로 감싼다.
+
+`KernelInterface`, register layout, thread 참여, register binding, `KernelCode`는
+`emit/native/`가 소유한다. `native/access.rs`는 공통 `TensorAccess`를 Native 조합용
+접근/port 표현으로 변환한다. 공통 값·view 의미를 다시 정의하는 분석기가 아니다.
+구현 선택은 Emit의 책임이며 IR Reader와 `PhysicalPlanBuilder`는 구현을 선택하지 않는다.
+그림의 specify/render는 이 Native 전용 계약에 해당한다.
 
 ### 입력 문맥
 
@@ -244,10 +254,17 @@ Target과 rank 수, 버퍼 binding, workspace, shared memory, thread 구성과
 
 ![여러 KernelProvider를 통한 원시 커널 선택과 본문 결합, CudaStreamed·CudaPersistent 실행 배치 및 다른 플랫폼의 확장 지점을 보여주는 Emit 처리 경로](../images/trinity-lowering-emission.svg)
 
-공통 정보 준비에서는 BufferBinding과 값의 dtype·shape·storage, Loop 문맥과
-실행 순서를 구성한다. 구현에 종속적인 임시 메모리와 최종 자원 배치는 이 시점에 고정하지 않는다.
+공통 [`prepare`](../../src/emit/prepare.rs)는 확정된 PhysicalPlan을 참조하고
+configuration symbol이 bound 상태인지 검사한다. 값의 dtype·shape·storage와 Loop/순서는
+이미 common plan이 소유한다. 이 단계는 CUDA allocation 크기나 launch slot을 만들지 않는다.
 
-현재 Native 경로는 `prepare` → `collect` → `combine` → `cuda::emit`이며 각 단계의 타입은 해당 소스가 원본이다. 실행 배치 이후의 코드 생성과
+현재 Native 경로는 `prepare` → `collect` → `combine` → `cuda::emit`이다.
+`collect`는 Native provider만 받는다. `cuda::emit` 내부에서
+[`native/bindings`](../../src/emit/native/bindings.rs)가 단일 출력·불변 입력 ABI 조건,
+External/Global 버퍼의 row-major strides, bytes, slot과 기본 alignment를 준비한다.
+이후 CUDA 실행 배치가 구현의 alignment/shared resource 요구를 반영하고 render가
+실제 pointer/index 표현과 launch wrapper를 조립한다. 독립 Triton/Quack 후보 열거는
+이 Native buffer 준비를 거치지 않는다. 각 단계의 타입은 해당 소스가 원본이다. 실행 배치 이후의 코드 생성과
 출력은 플랫폼별로 분리한다. CUDA 경로는 CUDA render를 거쳐 `CudaSource`를 생성한다.
 점선은 AMD 등 다른 플랫폼의 실행 배치·render·출력을 추가할 확장 경로이며,
 해당 플랫폼의 구체적인 코드 생성과 출력 계약은 후속 설계에서 정한다.

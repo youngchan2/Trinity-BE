@@ -4,7 +4,7 @@ use super::EmitError;
 use super::collect::{SelectedKernel, SelectedKernels};
 use super::execution::ExecutionModel;
 use super::prepare::PreparedPlan;
-use super::provider::{KernelInterface, RegisterLayout, ThreadPolicy};
+use crate::emit::native::{KernelInterface, RegisterLayout, ThreadPolicy};
 use crate::{LoopDomain, LoopKind, OperationId, PhysicalPlan, Statement, Storage, ValueInstanceId};
 use std::collections::BTreeMap;
 
@@ -296,7 +296,7 @@ struct RegisterProducer {
     operation: OperationId,
     output: usize,
     root: usize,
-    port: super::provider::KernelPort,
+    port: super::native::KernelPort,
     layout: RegisterLayout,
 }
 
@@ -319,6 +319,9 @@ fn compose_body(
         let id = invocation.operation;
         let specification = &kernels[&id].specification;
         let interface = specification.interface(block_threads);
+        if interface.iteration.as_deref() != specification.iteration() {
+            return Err("native interface differs from the specified iteration".into());
+        }
         validate_interface(plan, id, &interface)?;
         let resources = specification.requirements();
         let mut root = None;
@@ -482,7 +485,7 @@ impl CombinedPlan<'_> {
     pub(super) fn render_body(
         &self,
         body: &CombinedBody,
-        bindings: &super::provider::KernelBindings,
+        bindings: &super::native::KernelBindings,
     ) -> Result<render::RenderedBody, super::provider::ProviderError> {
         render::render_body(self, body, bindings)
     }
@@ -491,7 +494,7 @@ impl CombinedPlan<'_> {
 /// A producer in this CTA must cover memory consumed by subsequent roots.
 /// Bounds validity remains the responsibility of the input generator.
 fn check_memory_coverage(prior: &KernelInterface, next: &KernelInterface) -> Result<(), String> {
-    use super::provider::access::Axis;
+    use super::native::access::Axis;
     for output in &prior.outputs {
         for input in &next.inputs {
             if output.access.storage == Storage::Register

@@ -120,3 +120,37 @@ fn ir_preserves_gemm_without_selecting_a_supported_cuda_implementation() {
             .all(|(_, v)| v.dtype() == DType::Fp32)
     );
 }
+
+#[test]
+fn operation_candidates_do_not_prepare_unused_native_abi_buffers() {
+    let mut b = PhysicalPlanBuilder::new(TARGET, 1);
+    // Legal logical extent, but too large for the native ABI's int64 byte count.
+    b.add_named_value(
+        "unused",
+        DType::Fp32,
+        [(i64::MAX as usize / 2) + 1],
+        Storage::Global,
+    );
+    let x = b.add_named_value("X", DType::Fp32, [16], Storage::External);
+    let y = b.add_named_value("Y", DType::Fp32, [16], Storage::External);
+    b.bind_input("X", x);
+    let op = b.add_operation(
+        [x],
+        [y],
+        store(y, load(x, [AccessIndex::FullTile]), [AccessIndex::FullTile]),
+    );
+    let plan = b.build(vec![Statement::Operation(op)], "Y", y).unwrap();
+    let candidates = emit::kernel_candidates(&plan).unwrap();
+    assert!(
+        candidates
+            .values()
+            .next()
+            .unwrap()
+            .candidates
+            .iter()
+            .any(|c| c.provider() == "triton")
+    );
+    assert!(
+        matches!(emit::emit(&plan), Err(emit::EmitError::InvalidExecution { reason }) if reason.contains("buffer bytes overflow"))
+    );
+}

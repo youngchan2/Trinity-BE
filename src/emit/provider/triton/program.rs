@@ -52,15 +52,13 @@ impl TritonKernelProvider {
                 )));
             }
             options.shapes.insert(name.into(), value.shape().to_vec());
-            if value.dtype_is_explicit() {
-                let dtype = value.dtype().into();
-                if options.dtypes.get(name).is_some_and(|old| *old != dtype) {
-                    return Err(invalid(format!(
-                        "dtype override differs from PhysicalPlan value {name}"
-                    )));
-                }
-                options.dtypes.insert(name.into(), dtype);
+            let dtype = value.dtype().into();
+            if options.dtypes.get(name).is_some_and(|old| *old != dtype) {
+                return Err(invalid(format!(
+                    "dtype override differs from PhysicalPlan value {name}"
+                )));
             }
+            options.dtypes.insert(name.into(), dtype);
         }
         let mut symbols = physical.bindings().clone();
         symbols.extend(options.symbols);

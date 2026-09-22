@@ -5,7 +5,8 @@ use super::super::super::render::{
     render_template, resolve_pointer, validate_prefix,
 };
 use super::Sm80GemmSpecification;
-use crate::emit::provider::{Kernel, KernelBindings, KernelCode, ProviderError, RegisterBinding};
+use crate::emit::native::{Kernel, KernelBindings, KernelCode, RegisterBinding};
+use crate::emit::provider::ProviderError;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -76,8 +77,6 @@ pub(super) fn render(
         )?),
         after: include_str!("template/epilogue_end.cu.j2").into(),
     };
-    if let Kernel::Native { epilogue, .. } = &mut kernel {
-        *epilogue = code;
-    }
+    kernel.epilogue = code;
     Ok(kernel)
 }
