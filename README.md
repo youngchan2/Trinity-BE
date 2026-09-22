@@ -1,10 +1,12 @@
-# trinity-lowering
+# Trinity Lowering
 
-> Native Streamed emission is connected for Hopper, sm_89 and sm_120. Explicit
-> IR/Builder plans can generate CUDA artifacts using pointwise, reduction, GEMM
-> and Register continuations. Persistent, communication, Shared tensor transport
-> and Opaque launches within the native CUDA emitter remain unsupported. The previous
-> emitter is reference-only under [old/emit-rewrite](old/emit-rewrite/README.md).
+Trinity Lowering provides physical planning, CUDA code generation, and compilation for explicit tensor programs, with a runtime for PyTorch Tensor execution.
+
+The compiler selects kernel implementations for a physical plan and produces
+CUDA artifacts. The runtime loads these artifacts and executes them with
+PyTorch Tensors bound through the Python API.
+
+## Compiler entry points
 
 Generate Triton kernels from extracted, scheduled Trinity IR, or construct explicit
 tensor program plans for the CUDA provider pipeline.
@@ -27,25 +29,60 @@ remains separate. Unannotated Triton source IR defaults
 to FP16; typed candidates preserve the PhysicalPlan's BF16/FP32 storage.
 The former CUDA `lower_loop_ir` API is now named `lower_ir`.
 
-Rust handles implementation selection, physical plan validation, CUDA emission,
-and compilation. The Python API binds Tensors to a C++ runtime that owns native
-loading and execution.
-
-The CUDA backend emits single-GPU Streamed programs for `sm_90a`, `sm_89` and
-`sm_120`. The retained NVSHMEM runtime is not yet connected to the new emitter.
-
-Contiguous BF16/FP32 vectors and matrices support pointwise arithmetic, ReLU,
-row sums and explicit row broadcasting. See the
-[Python operator guide](python/README.md#pointwise-operations) for enumeration
-and dtype contracts.
-
 ## Getting started
 
-Follow the [Python/PyTorch guide](python/README.md) for prerequisites,
-installation, and a complete single-GPU BF16 matrix multiplication example.
+### Prerequisites
 
-The uv project is rooted in this directory, alongside `Cargo.toml`. Python
-sources, examples, and tests live under `python/`.
+- Linux x86-64
+- NVIDIA GPU listed in the [supported targets](docs/architecture/emission.md#대상-하드웨어).
+- CUDA Toolkit 13.0 and a compatible NVIDIA driver.
+- uv, Python 3.12, Rust, and a C++17 compiler.
+
+The examples below use the default Hopper target.
+
+### Installation
+
+Run the following commands from the `trinity-lowering` source directory
+containing `pyproject.toml` and `Cargo.toml`:
+
+```sh
+git submodule update --init --recursive third_party/cutlass
+export CUDA_HOME=/usr/local/cuda-13.0
+export CUTLASS_HOME="$PWD/third_party/cutlass"
+
+uv sync --no-install-project
+TRINITY_BUILD_CUDA=1 MAX_JOBS=1 uv pip install --no-build-isolation --no-deps -e .
+```
+
+Adjust `CUDA_HOME` to the local CUDA Toolkit path. The uv project in this
+directory pins PyTorch 2.9.1+cu130. Run subsequent commands from this directory.
+
+### Examples
+
+Run BF16 matrix multiplication with bias addition:
+
+```sh
+uv run --no-sync python python/examples/streamed.py
+```
+
+The example compiles the program, binds PyTorch Tensors, executes it on a CUDA
+stream, and checks the result against a PyTorch reference.
+
+For CUDA Graph capture and replay with an additional ReLU operation:
+
+```sh
+uv run --no-sync python python/examples/graph.py
+```
+
+## How it works
+
+![Trinity Lowering architecture](docs/images/trinity-lowering-architecture.svg)
+
+- **Planning** establishes a validated physical plan for the input tensor program.
+- **Emission** translates the plan into CUDA code for the target hardware.
+- **Compilation** makes the generated code executable by the runtime.
+
+See the [architecture guide](docs/architecture/README.md) for the public API and details of each stage.
 
 ## Source layout
 
