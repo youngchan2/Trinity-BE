@@ -1,11 +1,14 @@
+mod bindings;
 mod builder;
 mod error;
 mod expression;
 mod ir;
 mod normalize;
+mod scheduled;
 mod statement;
 pub(crate) use expression::accumulation_rhs;
-pub use expression::{AccessIndex, Constant, Expression, TensorAccess};
+pub use expression::{AccessIndex, Constant, Expression, TensorAccess, TileWidth, ValueOp};
+pub use scheduled::ScheduledConfig;
 pub use statement::{IndexExpr, Loop, LoopDomain, LoopKind, Statement};
 
 pub use builder::PhysicalPlanBuilder;
@@ -125,6 +128,8 @@ pub struct ValueInstance {
     shape: Box<[usize]>,
     storage: Storage,
     name: Option<String>,
+    dimensions: Option<Box<[IndexExpr]>>,
+    dtype_explicit: bool,
 }
 
 impl ValueInstance {
@@ -138,6 +143,8 @@ impl ValueInstance {
             shape: shape.into_iter().collect(),
             storage,
             name: None,
+            dimensions: None,
+            dtype_explicit: true,
         }
     }
 
@@ -155,6 +162,12 @@ impl ValueInstance {
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+    pub fn dimensions(&self) -> Option<&[IndexExpr]> {
+        self.dimensions.as_deref()
+    }
+    pub fn dtype_is_explicit(&self) -> bool {
+        self.dtype_explicit
     }
 }
 
@@ -188,6 +201,7 @@ pub struct Operation {
     inflows: Vec<ValueInstanceId>,
     outflows: Vec<ValueInstanceId>,
     expression: Expression,
+    zero_init: Vec<ValueInstanceId>,
 }
 
 impl Operation {
@@ -200,6 +214,7 @@ impl Operation {
             inflows: inflows.into_iter().collect(),
             outflows: outflows.into_iter().collect(),
             expression,
+            zero_init: Vec::new(),
         }
     }
 
@@ -214,6 +229,9 @@ impl Operation {
     pub fn expression(&self) -> &Expression {
         &self.expression
     }
+    pub fn zero_init(&self) -> &[ValueInstanceId] {
+        &self.zero_init
+    }
 }
 
 /// A validated, canonical physical program that owns its tensor and ABI metadata.
@@ -227,7 +245,9 @@ pub struct PhysicalPlan {
     value_instances: IdVec<ValueInstanceId, ValueInstance>,
     operations: IdVec<OperationId, Operation>,
     statements: Vec<Statement>,
-    output: TensorBinding,
+    outputs: Box<[TensorBinding]>,
+    mutable_inputs: std::collections::BTreeSet<ValueInstanceId>,
+    bindings: std::collections::BTreeMap<String, i64>,
     hash: u64,
 }
 
@@ -245,7 +265,16 @@ impl PhysicalPlan {
     }
 
     pub fn output(&self) -> &TensorBinding {
-        &self.output
+        self.outputs.first().expect("this path requires an output")
+    }
+    pub fn outputs(&self) -> &[TensorBinding] {
+        &self.outputs
+    }
+    pub fn mutable_inputs(&self) -> &std::collections::BTreeSet<ValueInstanceId> {
+        &self.mutable_inputs
+    }
+    pub fn bindings(&self) -> &std::collections::BTreeMap<String, i64> {
+        &self.bindings
     }
 
     pub fn value_instance(&self, id: ValueInstanceId) -> Option<&ValueInstance> {
@@ -284,6 +313,8 @@ impl PhysicalPlan {
             && self.value_instances == other.value_instances
             && self.operations == other.operations
             && self.statements == other.statements
-            && self.output == other.output
+            && self.outputs == other.outputs
+            && self.mutable_inputs == other.mutable_inputs
+            && self.bindings == other.bindings
     }
 }

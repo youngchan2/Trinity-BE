@@ -128,12 +128,9 @@ impl Regions {
     }
 }
 
-fn region(
-    access: &Access,
-    coordinates: &BTreeMap<String, i64>,
-) -> Result<Option<Region>, EmitError> {
+fn region(access: &Access, coordinates: &BTreeMap<String, i64>) -> Result<Vec<Region>, EmitError> {
     if access.storage == Storage::Register {
-        return Ok(None);
+        return Ok(vec![]);
     }
 
     let mut axes = Vec::new();
@@ -152,10 +149,12 @@ fn region(
                 *width as i64,
                 *clipped,
             ),
-            Axis::Element { variable, .. } => (
-                *coordinates
+            Axis::Element { variable, step } => (
+                coordinates
                     .get(variable)
-                    .ok_or_else(|| invalid("missing element coordinate"))?,
+                    .ok_or_else(|| invalid("missing element coordinate"))?
+                    .checked_div(step.evaluate(coordinates).map_err(invalid)?)
+                    .ok_or_else(|| invalid("invalid element step"))?,
                 1,
                 false,
             ),
@@ -175,7 +174,7 @@ fn region(
 
         if start >= size {
             if clipped {
-                return Ok(None);
+                return Ok(vec![]);
             }
             return Err(invalid("execution region starts outside tensor"));
         }
@@ -183,10 +182,47 @@ fn region(
         axes.push((start, end.min(size)));
     }
 
-    Ok(Some(Region {
-        value: access.value,
-        axes,
-    }))
+    // Different views alias the same storage. Compare physical element intervals,
+    // not unrelated logical coordinates from each view. Collapse the contiguous
+    // suffix into one interval; only enumerate rows for a strided rectangle.
+    let suffix = axes
+        .iter()
+        .zip(&access.shape)
+        .rposition(|(&(start, end), &size)| start != 0 || end != size as i64)
+        .unwrap_or(0);
+    let stride = access.shape[suffix + 1..]
+        .iter()
+        .map(|&n| n as i64)
+        .product::<i64>();
+    fn rows(axes: &[(i64, i64)], shape: &[usize], prefix: i64, out: &mut Vec<i64>) {
+        if axes.is_empty() {
+            out.push(prefix);
+            return;
+        }
+        for index in axes[0].0..axes[0].1 {
+            rows(
+                &axes[1..],
+                &shape[1..],
+                prefix * shape[0] as i64 + index,
+                out,
+            );
+        }
+    }
+    let mut offsets = Vec::new();
+    rows(&axes[..suffix], &access.shape[..suffix], 0, &mut offsets);
+    Ok(offsets
+        .into_iter()
+        .map(|prefix| {
+            let base = prefix * access.shape[suffix] as i64;
+            Region {
+                value: access.value,
+                axes: vec![(
+                    (base + axes[suffix].0) * stride,
+                    (base + axes[suffix].1) * stride,
+                )],
+            }
+        })
+        .collect())
 }
 
 #[derive(Default)]
@@ -203,7 +239,7 @@ struct Validator<'a, 'p> {
 
 impl Validator<'_, '_> {
     fn inputs(&mut self, access: &Access, coords: &BTreeMap<String, i64>) -> Result<(), EmitError> {
-        if let Some(r) = region(access, coords)? {
+        for r in region(access, coords)? {
             if !self.available.covers(&r) {
                 return Err(invalid(format!(
                     "value {} reads an unproduced region or requires another CTA in the same launch",
@@ -221,7 +257,7 @@ impl Validator<'_, '_> {
         access: &Access,
         coords: &BTreeMap<String, i64>,
     ) -> Result<(), EmitError> {
-        if let Some(r) = region(access, coords)? {
+        for r in region(access, coords)? {
             self.available.insert(r.clone());
             self.effects.writes.insert(r);
         }
@@ -296,13 +332,15 @@ pub(super) fn validate(
 ) -> Result<(), EmitError> {
     let full = |value| Region {
         value,
-        axes: plan
-            .value_instance(value)
-            .unwrap()
-            .shape()
-            .iter()
-            .map(|&n| (0, n as i64))
-            .collect(),
+        axes: vec![(
+            0,
+            plan.value_instance(value)
+                .unwrap()
+                .shape()
+                .iter()
+                .map(|&n| n as i64)
+                .product(),
+        )],
     };
 
     let mut available = Regions::default();

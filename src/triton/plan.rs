@@ -3,50 +3,9 @@ use super::{Options, TileAccess};
 use crate::analysis::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Storage {
-    Register,
-    Global,
-    /// Cross-sloop tensor supplied by the caller using its declared storage dtype.
-    Materialized,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitialValue {
-    Zero,
-    Global,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Initialization {
-    pub scope: ScopeId,
-    pub access: AccessId,
-    pub value: InitialValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TensorPlan {
-    pub storage: Storage,
-    pub representative: AccessId,
-    pub initialization: Option<Initialization>,
-    /// A register's final store executes at the end of this scope.
-    pub export_scope: Option<ScopeId>,
-    /// Value is visible outside this kernel.
-    pub publish: bool,
-    /// Additive recurrences, separately from ordinary assignments/epilogues.
-    pub accumulators: BTreeSet<StatementId>,
-}
-
-impl TensorPlan {
-    pub(crate) fn has_global(&self) -> bool {
-        self.storage != Storage::Register
-            || self.publish
-            || self
-                .initialization
-                .as_ref()
-                .is_some_and(|i| i.value == InitialValue::Global)
-    }
-}
+pub use crate::analysis::storage::{
+    AccessMode as Storage, InitialValue, Initialization, LocalRead, TensorStoragePlan as TensorPlan,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelPlan {
@@ -62,13 +21,6 @@ pub struct KernelPlan {
     pub register_accesses: BTreeSet<AccessId>,
     /// A local read refers to an ordered definition and may select a sub-tile.
     pub local_reads: BTreeMap<AccessId, LocalRead>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRead {
-    pub definition: AccessId,
-    /// Corresponding storage axes, excluding statically singleton view axes.
-    pub axes: Vec<(usize, usize)>,
 }
 
 /// Triton/Python naming and tuning decisions. Logical tensor metadata belongs

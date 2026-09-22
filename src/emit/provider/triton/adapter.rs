@@ -66,6 +66,13 @@ fn expression(e: &E, r: &KernelRequest) -> Result<(N, Vec<usize>, DType), Error>
         E::Constant(c) => {
             let value = match c {
                 Constant::Integer(i) => i.to_string(),
+                Constant::Float64(bits) => {
+                    let n = f64::from_bits(*bits);
+                    if !n.is_finite() {
+                        return Err(invalid("nonfinite constant"));
+                    }
+                    format!("{n:?}")
+                }
                 Constant::Float32(bits) => {
                     let n = f32::from_bits(*bits);
                     if !n.is_finite() {
@@ -97,6 +104,7 @@ fn expression(e: &E, r: &KernelRequest) -> Result<(N, Vec<usize>, DType), Error>
                     ));
                 }
                 let dtype = match adtype {
+                    DType::Fp16 => "fp16",
                     DType::Bf16 => "bf16",
                     DType::Fp32 => "fp32",
                 };

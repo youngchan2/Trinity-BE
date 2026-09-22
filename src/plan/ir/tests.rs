@@ -64,7 +64,7 @@ fn access_decoding_resolves_ids_and_orders_slots_by_tensor_axis() {
                 AccessIndex::Elem("i".into()),
                 AccessIndex::ClippedTile {
                     variable: "j".into(),
-                    width: 7
+                    width: 7usize.into()
                 },
             ]
         ))
@@ -107,7 +107,7 @@ fn malformed_notation_is_rejected_at_the_input_boundary_with_offsets() {
         ),
         (
             format!("(load {} (keyed_index))", view.replace("a 16", "a 8")),
-            "view extent differs",
+            "view element count differs",
         ),
         (
             format!(
@@ -160,5 +160,29 @@ fn builder_only_forms_do_not_extend_the_text_ir_language() {
             .unwrap()
             .message
             .contains("unsupported program node all_gather")
+    );
+}
+
+#[test]
+fn builder_notation_keeps_symbolic_widths_and_access_views() {
+    let mut builder = builder();
+    let x = builder.add_named_value("X", DType::Fp32, [128], Storage::External);
+    let Expression::Load(access) = builder
+        .parse_expression(
+            "(load (view (tensor X) (layout (axis row 4) (axis col 32)))
+          (keyed_index (slot col (clipped_tile j BLOCK)) (slot row fulltile)))",
+        )
+        .unwrap()
+    else {
+        panic!("load")
+    };
+    assert_eq!(access.value, x);
+    assert_eq!(access.view_shape.as_deref(), Some([4, 32].as_slice()));
+    assert_eq!(
+        access.indices[1],
+        AccessIndex::ClippedTile {
+            variable: "j".into(),
+            width: TileWidth::Symbol("BLOCK".into()),
+        }
     );
 }

@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 /// statement does not itself define a kernel launch or one task.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Statement {
+    /// One scheduled source kernel region; its internal sequence is indivisible
+    /// when offered as an opaque implementation candidate.
+    Region(Vec<Statement>),
     Loop(Loop),
     Operation(OperationId),
 }
@@ -14,6 +17,7 @@ pub enum Statement {
 impl Statement {
     pub fn operations(&self) -> Vec<OperationId> {
         match self {
+            Self::Region(body) => body.iter().flat_map(Self::operations).collect(),
             Self::Operation(id) => vec![*id],
             Self::Loop(loop_) => loop_.body.iter().flat_map(Self::operations).collect(),
         }
@@ -69,6 +73,8 @@ impl IndexExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LoopKind {
+    /// Parallel split binding of a normalized mloop.
+    Split,
     Parallel,
     Sequential,
 }

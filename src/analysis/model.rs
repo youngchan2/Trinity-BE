@@ -167,14 +167,14 @@ pub struct KernelInfo {
     pub read_writes: ReadWrites,
 }
 
-/// Owned syntax and analysis snapshot for subsequent passes and code generation.
+/// Shared scope/access snapshot, collected from source or projected from a plan.
 ///
 /// There are no emitter caches or mutable "currently generating" classifications.
 /// Storage, liveness, initialization and precision plans are intentionally not
 /// inferred by this first collection pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScheduledIr {
-    pub(super) ir: IrNode,
+    pub(super) ir: Option<IrNode>,
     pub(super) tensors: Vec<TensorInfo>,
     pub(super) kernels: Vec<KernelInfo>,
     pub(super) scopes: Vec<ScopeInfo>,
@@ -183,8 +183,10 @@ pub struct ScheduledIr {
 }
 
 impl ScheduledIr {
-    pub fn ir(&self) -> &IrNode {
-        &self.ir
+    /// Original syntax, when collected from source. Typed-plan projections have
+    /// no syntax tree; code generation consumes the scope/access tables instead.
+    pub fn ir(&self) -> Option<&IrNode> {
+        self.ir.as_ref()
     }
     pub fn tensors(&self) -> &[TensorInfo] {
         &self.tensors

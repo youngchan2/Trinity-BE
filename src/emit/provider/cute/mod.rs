@@ -20,6 +20,28 @@ impl KernelProvider for CuTeKernelProvider {
     }
 
     fn specify(&self, context: &KernelContext<'_, '_>) -> Result<SpecifiedKernel, ProviderError> {
+        if context
+            .prepared
+            .plan
+            .operation(context.operation)
+            .unwrap()
+            .expression()
+            .accesses()
+            .iter()
+            .any(|a| {
+                context
+                    .prepared
+                    .plan
+                    .value_instance(a.value)
+                    .unwrap()
+                    .dtype()
+                    == crate::DType::Fp16
+            })
+        {
+            return Err(ProviderError::Unsupported(
+                "CuTe templates currently support BF16/FP32; FP16 uses Triton".into(),
+            ));
+        }
         match (context.prepared.plan.target(), context.execution) {
             (
                 TargetCapability::Cuda(_),

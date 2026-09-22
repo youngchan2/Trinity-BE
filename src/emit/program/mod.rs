@@ -103,7 +103,7 @@ fn reference(e: &E) -> Value {
     match e {
         E::Load(a) => json!({"op":"load","value":a.value.index()}),
         E::Constant(c) => {
-            json!({"op":"constant","value":match c { Constant::Integer(i) => json!(i), Constant::Float32(bits) => json!(f32::from_bits(*bits)) }})
+            json!({"op":"constant","value":match c { Constant::Integer(i) => json!(i), Constant::Float32(bits) => json!(f32::from_bits(*bits)), Constant::Float64(bits) => json!(f64::from_bits(*bits)) }})
         }
         E::Add(a) | E::Sub(a) | E::Mul(a) | E::Div(a) | E::Matmul(a) => {
             json!({"op":match e { E::Add(_)=>"add",E::Sub(_)=>"sub",E::Mul(_)=>"mul",E::Div(_)=>"div",_=>"matmul"}, "args":[reference(&a[0]),reference(&a[1])]})

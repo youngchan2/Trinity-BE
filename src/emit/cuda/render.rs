@@ -98,6 +98,7 @@ pub(super) fn render(
         .filter_map(|(id, value)| {
             prepared.bindings.slot(id).map(|slot| {
                 let dtype = match value.dtype() {
+                    crate::DType::Fp16 => "cutlass::half_t",
                     crate::DType::Bf16 => "cutlass::bfloat16_t",
                     crate::DType::Fp32 => "float",
                 };

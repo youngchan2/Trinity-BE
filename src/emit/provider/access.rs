@@ -6,13 +6,15 @@ fn unsupported(message: &str) -> ProviderError {
     ProviderError::Unsupported(message.into())
 }
 use crate::emit::provider::KernelContext;
-use crate::{AccessIndex, DType, IndexExpr, Storage, TensorAccess, ValueInstanceId};
+use crate::{AccessIndex, DType, IndexExpr, Storage, TensorAccess, TileWidth, ValueInstanceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::emit) struct Access {
     pub value: ValueInstanceId,
     pub dtype: DType,
     pub storage: Storage,
+    pub value_shape: Vec<usize>,
+    /// Logical shape of this access, used for contiguous addressing and tiles.
     pub shape: Vec<usize>,
     pub axes: Vec<Axis>,
 }
@@ -42,8 +44,8 @@ impl Access {
             .value_instance(access.value)
             .ok_or_else(|| ProviderError::Failed("missing value".into()))?;
 
-        if value
-            .shape()
+        let shape = access.shape(value.shape());
+        if shape
             .iter()
             .any(|&size| size == 0 || size > i64::MAX as usize)
         {
@@ -55,16 +57,21 @@ impl Access {
             .iter()
             .map(|index| {
                 Ok(match index {
+                    AccessIndex::Slice { .. } | AccessIndex::Element(_) => {
+                        return Err(unsupported(
+                            "CuTe template requires loop-coordinate access indices",
+                        ));
+                    }
                     AccessIndex::FullTile => Axis::Full,
                     AccessIndex::Tile { variable, width }
                     | AccessIndex::ClippedTile { variable, width } => {
-                        if *width == 0 || *width > i64::MAX as usize {
-                            return Err(unsupported("kernel requires positive i64 tile widths"));
-                        }
+                        let width = width
+                            .resolve(&Default::default())
+                            .map_err(ProviderError::Unsupported)?;
 
                         Axis::Tile {
                             variable: variable.clone(),
-                            width: *width,
+                            width,
                             clipped: matches!(index, AccessIndex::ClippedTile { .. }),
                         }
                     }
@@ -88,7 +95,8 @@ impl Access {
             value: access.value,
             dtype: value.dtype(),
             storage: value.storage(),
-            shape: value.shape().to_vec(),
+            value_shape: value.shape().to_vec(),
+            shape: shape.to_vec(),
             axes,
         })
     }
@@ -105,6 +113,7 @@ impl Access {
 
     pub(in crate::emit) fn matches(&self, source: &TensorAccess) -> bool {
         self.value == source.value
+            && self.shape == source.shape(&self.value_shape)
             && self.axes.len() == source.indices.len()
             && self
                 .axes
@@ -122,7 +131,7 @@ impl Access {
                             variable: v,
                             width: w,
                         },
-                    ) => !clipped && variable == v && width == w,
+                    ) => !clipped && variable == v && *w == TileWidth::Constant(*width),
                     (
                         Axis::Tile {
                             variable,
@@ -133,7 +142,7 @@ impl Access {
                             variable: v,
                             width: w,
                         },
-                    ) => *clipped && variable == v && width == w,
+                    ) => *clipped && variable == v && *w == TileWidth::Constant(*width),
                     (Axis::Element { variable, .. }, AccessIndex::Elem(v)) => variable == v,
                     _ => false,
                 })

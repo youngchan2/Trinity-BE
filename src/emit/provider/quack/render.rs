@@ -13,6 +13,7 @@ pub(super) fn render(s: &QuackSpecification) -> String {
             (
                 a.value.index(),
                 match a.dtype {
+                    DType::Fp16 => "float16",
                     DType::Bf16 => "bfloat16",
                     DType::Fp32 => "float32",
                 },

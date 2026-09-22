@@ -9,6 +9,10 @@
 //! access and dataflow facts while retaining the source expressions in
 //! [`ScheduledIr`]. They do not choose a provider, register representation,
 //! padding, grid or initialization policy.
+//!
+//! [`storage`] consumes those facts to select common value storage, local read
+//! bindings, recurrence initialization and publication points. Providers retain
+//! the selected backing storage while choosing their implementation details.
 
 pub mod access;
 mod collect;
@@ -19,7 +23,10 @@ mod ir;
 pub mod loops;
 pub mod metadata;
 mod model;
+mod physical;
+pub use physical::from_physical;
 pub mod scalar;
+pub mod storage;
 
 pub use collect::{AnalysisError, analyze, analyze_text};
 use facts::invalid;

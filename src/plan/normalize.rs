@@ -26,6 +26,12 @@ pub(super) fn normalize(plan: &mut PhysicalPlan) -> Result<(), PhysicalInvariant
             }
         }
     }
+    // Providers may inspect every declared value, including unused scratch.
+    for (id, _) in plan.value_instances.iter() {
+        if !order.contains(&id) {
+            order.push(id);
+        }
+    }
 
     let mut used: BTreeSet<String> = plan
         .value_instances
@@ -55,18 +61,24 @@ fn normalize_operands(plan: &mut PhysicalPlan) -> Result<(), PhysicalInvariantEr
         plan: &mut PhysicalPlan,
         statements: &[Statement],
         accum: Option<&str>,
+        explicit_initialization: bool,
     ) -> Result<(), PhysicalInvariantError> {
         let fail = |s: &str| PhysicalInvariantError::InvalidProgram(s.into());
         for statement in statements {
             match statement {
+                Statement::Region(body) => visit(plan, body, None, true)?,
                 Statement::Loop(l) => visit(
                     plan,
                     &l.body,
-                    if l.kind == LoopKind::Sequential && l.body.len() == 1 {
+                    if !explicit_initialization
+                        && l.kind == LoopKind::Sequential
+                        && l.body.len() == 1
+                    {
                         Some(&l.domain.variable)
                     } else {
                         None
                     },
+                    explicit_initialization,
                 )?,
                 Statement::Operation(id) => {
                     let op = &plan.operations.values[id.index()];
@@ -88,13 +100,20 @@ fn normalize_operands(plan: &mut PhysicalPlan) -> Result<(), PhysicalInvariantEr
                     if op.outflows.as_slice() != [destination.value] {
                         return Err(fail("expression destination differs from declared outflow"));
                     }
-                    let inflows = rhs.reads();
+                    let inflows: Vec<_> = rhs
+                        .reads()
+                        .into_iter()
+                        .filter(|id| !op.zero_init.contains(id))
+                        .collect();
 
                     let declared: BTreeSet<_> = op
                         .inflows
                         .iter()
                         .copied()
-                        .filter(|id| !accumulator || !op.outflows.contains(id))
+                        .filter(|id| {
+                            (!accumulator || !op.outflows.contains(id))
+                                && !op.zero_init.contains(id)
+                        })
                         .collect();
 
                     if declared != inflows.iter().copied().collect() {
@@ -110,11 +129,12 @@ fn normalize_operands(plan: &mut PhysicalPlan) -> Result<(), PhysicalInvariantEr
         Ok(())
     }
 
-    visit(plan, &plan.statements.clone(), None)
+    visit(plan, &plan.statements.clone(), None, false)
 }
 
 /// Canonicalize declaration IDs without reordering executable statements.
 pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
+    let symbols = plan.symbols();
     let order: Vec<_> = plan
         .statements
         .iter()
@@ -149,7 +169,12 @@ pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
     for &id in &order {
         operation_ids[id.index()] = operations.len();
         let mut op = plan.operations.values[id.index()].clone();
-        for value in op.inflows.iter_mut().chain(&mut op.outflows) {
+        for value in op
+            .inflows
+            .iter_mut()
+            .chain(&mut op.outflows)
+            .chain(&mut op.zero_init)
+        {
             *value = ValueInstanceId::from_index(value_ids[value.index()]);
         }
         op.expression.remap_values(&value_ids);
@@ -161,8 +186,14 @@ pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
         operations: &mut [super::Operation],
         names: &BTreeMap<String, String>,
         next: &mut usize,
+        symbols: &BTreeSet<String>,
     ) {
         match statement {
+            Statement::Region(body) => {
+                for statement in body {
+                    visit(statement, ids, operations, names, next, symbols);
+                }
+            }
             Statement::Operation(id) => {
                 *id = OperationId::from_index(ids[id.index()]);
                 let expr = &mut operations[id.index()].expression;
@@ -173,12 +204,15 @@ pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
                 l.domain.stop.rename(names);
                 l.domain.step.rename(names);
                 let mut nested = names.clone();
+                while symbols.contains(&format!("lv{}", *next)) {
+                    *next += 1;
+                }
                 let variable = format!("lv{}", *next);
                 *next += 1;
                 nested.insert(l.domain.variable.clone(), variable.clone());
                 l.domain.variable = variable;
                 for statement in &mut l.body {
-                    visit(statement, ids, operations, &nested, next);
+                    visit(statement, ids, operations, &nested, next, symbols);
                 }
             }
         }
@@ -191,6 +225,7 @@ pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
             &mut operations,
             &BTreeMap::new(),
             &mut next,
+            &symbols,
         );
     }
     plan.operations = IdVec::from_values(operations);
@@ -203,7 +238,14 @@ pub(super) fn canonicalize(mut plan: PhysicalPlan) -> PhysicalPlan {
     for input in &mut plan.inputs {
         input.value = ValueInstanceId::from_index(value_ids[input.value.index()]);
     }
-    plan.output.value = ValueInstanceId::from_index(value_ids[plan.output.value.index()]);
+    for output in &mut plan.outputs {
+        output.value = ValueInstanceId::from_index(value_ids[output.value.index()]);
+    }
+    plan.mutable_inputs = plan
+        .mutable_inputs
+        .iter()
+        .map(|v| ValueInstanceId::from_index(value_ids[v.index()]))
+        .collect();
     plan.hash = hash_plan(&plan);
     plan
 }
@@ -216,6 +258,8 @@ pub(crate) fn hash_plan(plan: &PhysicalPlan) -> u64 {
     plan.value_instances.hash(&mut hasher);
     plan.operations.hash(&mut hasher);
     plan.statements.hash(&mut hasher);
-    plan.output.hash(&mut hasher);
+    plan.outputs.hash(&mut hasher);
+    plan.mutable_inputs.hash(&mut hasher);
+    plan.bindings.hash(&mut hasher);
     hasher.finish()
 }

@@ -21,6 +21,22 @@ impl BufferBindings {
 }
 
 pub(super) fn prepare(plan: &PhysicalPlan) -> Result<PreparedPlan<'_>, EmitError> {
+    if plan.value_instances().any(|(_, v)| !v.dtype_is_explicit()) {
+        return Err(EmitError::UnsupportedExecution {
+            reason: "native/operation candidates require resolved storage dtypes; use the Triton program provider for inferred intermediate precision".into(),
+        });
+    }
+    if plan.outputs().len() != 1 || !plan.mutable_inputs().is_empty() {
+        return Err(EmitError::UnsupportedExecution { reason:"this native/operation adapter requires one output and immutable inputs; use the Triton program provider".into() });
+    }
+    let symbols = plan.symbols();
+    if !symbols.is_empty() {
+        return Err(EmitError::InvalidExecution {
+            reason: format!(
+                "unbound configuration symbols {symbols:?}; call PhysicalPlan::bind_symbols before emission"
+            ),
+        });
+    }
     // Build buffer requirements and assign launch binding slots to External/Global values.
     let bindings = build_bindings(plan)?;
 

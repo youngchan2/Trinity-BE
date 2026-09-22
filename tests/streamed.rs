@@ -14,6 +14,9 @@ fn copy_text(kind: &str, start: i64, stop: i64) -> String {
     )
 }
 fn copy_ir(text: &str, target: CudaTargetCapability) -> PhysicalPlan {
+    try_copy_ir(text, target).unwrap()
+}
+fn try_copy_ir(text: &str, target: CudaTargetCapability) -> Result<PhysicalPlan, IrError> {
     lower_ir(
         text,
         &IrConfig {
@@ -22,8 +25,7 @@ fn copy_ir(text: &str, target: CudaTargetCapability) -> PhysicalPlan {
             ..Default::default()
         },
     )
-    .unwrap()
-    .remove(0)
+    .map(|mut plans| plans.remove(0))
 }
 fn identity(target: CudaTargetCapability) -> PhysicalPlan {
     let mut b = PhysicalPlanBuilder::new(TargetCapability::Cuda(target), 1);
@@ -90,7 +92,7 @@ fn reduction(target: CudaTargetCapability) -> PhysicalPlan {
                     AccessIndex::FullTile,
                     AccessIndex::ClippedTile {
                         variable: "k".into(),
-                        width: 65,
+                        width: 65usize.into(),
                     },
                 ],
             )),
@@ -178,10 +180,14 @@ fn rejects_incomplete_outputs_unordered_ctas_and_overflow() {
         Err(EmitError::InvalidExecution { .. })
     ));
     let text = copy_text("ploop", 0, 128).replace("0 128 64 i", "0 128 32 i");
-    assert!(matches!(
-        emit(&copy_ir(&text, target)),
-        Err(EmitError::InvalidExecution { .. })
-    ));
+    // Source ownership is now checked by the common analyzer before emission.
+    assert!(
+        try_copy_ir(&text, target)
+            .err()
+            .unwrap()
+            .message
+            .contains("not proven disjoint")
+    );
     let mut b = PhysicalPlanBuilder::new(TargetCapability::Cuda(target), 1);
     let x = b.add_value(DType::Fp32, [usize::MAX, 2], Storage::External);
     b.bind_input("X", x);
@@ -205,10 +211,13 @@ fn rejects_unsupported_execution_without_falling_back() {
         "(ploop 0 2 1 outer {})",
         copy_text("ploop", 0, 128).replace("0 128 64 i", "outer 128 64 i")
     );
-    assert!(matches!(
-        emit(&copy_ir(&text, CudaTargetCapability::Hopper)),
-        Err(EmitError::UnsupportedExecution { .. })
-    ));
+    assert!(
+        try_copy_ir(&text, CudaTargetCapability::Hopper)
+            .err()
+            .unwrap()
+            .message
+            .contains("not proven disjoint")
+    );
 }
 
 fn tail_pipeline(target: CudaTargetCapability, inner: LoopKind) -> PhysicalPlan {
@@ -221,7 +230,7 @@ fn tail_pipeline(target: CudaTargetCapability, inner: LoopKind) -> PhysicalPlan 
         tile("row", 1),
         AccessIndex::ClippedTile {
             variable: "col".into(),
-            width: 64,
+            width: 64usize.into(),
         },
     ];
     let a = b.add_operation(
@@ -278,9 +287,12 @@ fn intermediate_coverage_and_cross_cta_dependencies_require_launch_order() {
     let producer = copy_text("ploop", 0, 64).replace("(output Y)", "(tensor T)");
     let consumer = copy_text("ploop", 0, 128).replace("(input X)", "(tensor T)");
     let text = format!("(seq {producer} {consumer})");
-    let plan = lower_ir(&text, &config).unwrap().remove(0);
     assert!(
-        matches!(emit(&plan), Err(EmitError::InvalidExecution { reason }) if reason.contains("unproduced"))
+        lower_ir(&text, &config)
+            .err()
+            .unwrap()
+            .message
+            .contains("not covered")
     );
     let text = text.replace("ploop 0 64 64", "ploop 0 128 64");
     assert_eq!(

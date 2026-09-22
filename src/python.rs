@@ -489,8 +489,11 @@ fn lower_ir(
 
 fn statement_metadata(s: &tl::Statement) -> serde_json::Value {
     let mut data = serde_json::json!({"operations": s.operations().iter().map(|id| id.index()).collect::<Vec<_>>()});
+    if let tl::Statement::Region(body) = s {
+        data["region"] = serde_json::json!(body.iter().map(statement_metadata).collect::<Vec<_>>());
+    }
     if let tl::Statement::Loop(l) = s {
-        data["loop"] = serde_json::json!({"kind": match l.kind { tl::LoopKind::Parallel => "parallel", tl::LoopKind::Sequential => "sequential" },
+        data["loop"] = serde_json::json!({"kind": match l.kind { tl::LoopKind::Parallel => "parallel", tl::LoopKind::Sequential => "sequential", tl::LoopKind::Split=>"split" },
             "domain": l.domain, "body": l.body.iter().map(statement_metadata).collect::<Vec<_>>()});
     }
     data
@@ -498,6 +501,15 @@ fn statement_metadata(s: &tl::Statement) -> serde_json::Value {
 
 #[pymethods]
 impl PhysicalPlan {
+    fn bind_symbols(&self, bindings: std::collections::BTreeMap<String, i64>) -> PyResult<Self> {
+        self.0.bind_symbols(&bindings).map(Self).map_err(bad)
+    }
+
+    #[getter]
+    fn symbols(&self) -> Vec<String> {
+        self.0.symbols().into_iter().collect()
+    }
+
     #[getter]
     fn world_size(&self) -> usize {
         self.0.world_size()
@@ -507,7 +519,9 @@ impl PhysicalPlan {
         serde_json::json!({
             "world_size":self.0.world_size(),
             "inputs":self.0.inputs().iter().map(|b|serde_json::json!({"name":b.tensor(),"value":b.value().index()})).collect::<Vec<_>>(),
-            "output":{"name":self.0.output().tensor(),"value":self.0.output().value().index()},
+            "output":self.0.outputs().first().map(|b|serde_json::json!({"name":b.tensor(),"value":b.value().index()})),
+            "outputs":self.0.outputs().iter().map(|b|serde_json::json!({"name":b.tensor(),"value":b.value().index()})).collect::<Vec<_>>(),
+            "mutable_inputs":self.0.mutable_inputs().iter().map(|v|v.index()).collect::<Vec<_>>(),
             "values":self.0.value_instances().map(|(id,v)|serde_json::json!({"value":id.index(),"dtype":v.dtype(),"shape":v.shape(),"storage":format!("{:?}",v.storage()).to_lowercase()})).collect::<Vec<_>>(),
             "operations":self.0.operations().map(|(id,o)|serde_json::json!({"id":id.index(),"inflows":o.inflows().iter().map(|v|v.index()).collect::<Vec<_>>(),"outflows":o.outflows().iter().map(|v|v.index()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "statements":self.0.statements().iter().map(statement_metadata).collect::<Vec<_>>()

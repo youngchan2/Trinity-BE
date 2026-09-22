@@ -4,7 +4,7 @@ pub const TARGET: TargetCapability = TargetCapability::Cuda(CudaTargetCapability
 pub fn tile(variable: &str, width: usize) -> AccessIndex {
     AccessIndex::Tile {
         variable: variable.into(),
-        width,
+        width: width.into(),
     }
 }
 pub fn load(value: ValueInstanceId, indices: impl IntoIterator<Item = AccessIndex>) -> Expression {

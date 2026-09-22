@@ -100,6 +100,7 @@ fn render_scalar(
             let bits = match constant {
                 Constant::Integer(value) => (*value as f32).to_bits(),
                 Constant::Float32(bits) => *bits,
+                Constant::Float64(bits) => (f64::from_bits(*bits) as f32).to_bits(),
             };
             return format!("__uint_as_float({bits}u)");
         }

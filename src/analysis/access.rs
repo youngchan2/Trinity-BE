@@ -148,6 +148,31 @@ pub fn cell_of_tile(cell: ScopeId, start: &IndexExpr, width: &IndexExpr, ir: &Sc
             || info.end == IndexExpr::Apply("+".into(), vec![width.clone(), start.clone()]))
 }
 
+/// Equality may be proven before a configuration symbol has a concrete value.
+/// Failed constant evaluations alone never establish equality.
+pub(crate) fn equal_scalar(a: &IndexExpr, b: &IndexExpr, bindings: &Bindings) -> bool {
+    a == b
+        || matches!((constant(a, &bindings.symbols), constant(b, &bindings.symbols)),
+        (Ok(a), Ok(b)) if a == b)
+}
+
+fn dense_tile_range(
+    ir: &ScheduledIr,
+    scope: ScopeId,
+    width: &IndexExpr,
+    bindings: &Bindings,
+) -> Option<(i64, i64)> {
+    let info = ir.scope(scope).loop_info.as_ref()?;
+    if !equal_scalar(width, &info.step, bindings)
+        || constant(&info.step, &bindings.symbols).is_ok_and(|s| s <= 0)
+    {
+        return None;
+    }
+    let start = constant(&info.start, &bindings.symbols).ok()?;
+    let end = constant(&info.end, &bindings.symbols).ok()?;
+    (start >= 0 && end > start).then_some((start, end))
+}
+
 /// Prove a complete dense producer across its loops. Each changing axis must
 /// have its own independent binding; diagonal writes do not cover a rectangle.
 pub fn full_producer(
@@ -175,11 +200,8 @@ pub fn full_producer(
                 width,
             } => {
                 used.insert(*id)
-                    && loop_range(ir, *id, &bindings.symbols).is_ok_and(|(s, e, step)| {
-                        s == 0
-                            && e >= size
-                            && constant(width, &bindings.symbols).ok() == Some(step as i64)
-                    })
+                    && dense_tile_range(ir, *id, width, bindings)
+                        .is_some_and(|(s, e)| s == 0 && e >= size)
             }
             IndexDim::Elem(IndexExpr::LoopVar(id)) => {
                 used.insert(*id)
@@ -230,10 +252,10 @@ pub fn covers(
                         width: rw,
                     },
                 ) => {
-                    let Ok((w0, w1, step)) = loop_range(ir, *ws, &bindings.symbols) else {
+                    let Some((w0, w1)) = dense_tile_range(ir, *ws, ww, bindings) else {
                         return false;
                     };
-                    let Ok((r0, r1, rstep)) = loop_range(ir, *rs, &bindings.symbols) else {
+                    let Some((r0, r1)) = dense_tile_range(ir, *rs, rw, bindings) else {
                         return false;
                     };
                     if mapping.insert(*ws, *rs).is_some_and(|old| old != *rs)
@@ -244,8 +266,6 @@ pub fn covers(
                     (cross_kernel
                         || (ir.scope(*ws).kind == ScopeKind::SequentialLoop
                             && ir.scope(*rs).kind == ScopeKind::SequentialLoop))
-                        && constant(ww, &bindings.symbols).ok() == Some(step as i64)
-                        && constant(rw, &bindings.symbols).ok() == Some(rstep as i64)
                         && w0 <= r0
                         && w1 >= r1
                         && !ir.is_within(read.scope, *ws)
@@ -257,7 +277,7 @@ pub fn covers(
                     },
                     IndexDim::FullTile,
                 ) => {
-                    let Ok((start, end, step)) = loop_range(ir, *ws, &bindings.symbols) else {
+                    let Some((start, end)) = dense_tile_range(ir, *ws, width, bindings) else {
                         return false;
                     };
                     let extent = if let Some(shape) = &write.view_shape {
@@ -269,7 +289,6 @@ pub fn covers(
                         && !ir.is_within(read.scope, *ws)
                         && start == 0
                         && end >= extent as i64
-                        && constant(width, &bindings.symbols).ok() == Some(step as i64)
                         && write
                             .index
                             .iter()
@@ -278,12 +297,24 @@ pub fn covers(
                             == 1
                 }
                 (IndexDim::FullTile, _) => true,
+                (IndexDim::Elem(IndexExpr::LoopVar(ws)), IndexDim::FullTile) => {
+                    // A normalized split loop enumerates a scratch axis; its
+                    // completed result can be materialized for a later consumer.
+                    // Providers must implement the split/join synchronization.
+                    (cross_kernel || matches!(ir.scope(*ws).kind, ScopeKind::SequentialLoop | ScopeKind::SplitLoop))
+                        && !ir.is_within(read.scope, *ws)
+                        && loop_range(ir, *ws, &bindings.symbols).is_ok_and(|(s, e, step)| {
+                            s == 0 && extent(write, axis, ir, bindings)
+                                .is_some_and(|size| (e - 1).div_euclid(step as i64) + 1 >= size)
+                        })
+                        && write.index.iter().filter(|d| d.loop_dependencies().contains(ws)).count() == 1
+                }
                 (
                     IndexDim::Elem(IndexExpr::LoopVar(ws)),
                     IndexDim::Elem(IndexExpr::LoopVar(rs)),
                 ) if cross_kernel => {
-                    loop_range(ir, *ws, &bindings.symbols).ok()
-                        == loop_range(ir, *rs, &bindings.symbols).ok()
+                    matches!((loop_range(ir, *ws, &bindings.symbols), loop_range(ir, *rs, &bindings.symbols)),
+                        (Ok(w), Ok(r)) if w == r)
                 }
                 _ => false,
             }

@@ -47,6 +47,7 @@ impl TensorDType {
 impl From<crate::DType> for TensorDType {
     fn from(value: crate::DType) -> Self {
         match value {
+            crate::DType::Fp16 => Self::Fp16,
             crate::DType::Bf16 => Self::Bf16,
             crate::DType::Fp32 => Self::Fp32,
         }

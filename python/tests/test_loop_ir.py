@@ -50,11 +50,31 @@ def test_python_loop_reader_and_rank_three_metadata(candidate, world_size):
         assert tl.emit(plan).requirements.world_size == 1
 
 
-def test_reader_reports_missing_symbols():
+def test_reader_preserves_unbound_tiles_and_matches_eager_storage():
     text, symbols, dtypes = ffn_fixture()
-    del symbols["tile_k"]
-    with pytest.raises(ValueError, match=r"byte \d+.*tile_k"):
-        tl.lower_ir(text, symbols, dtypes)
+    tile_k = symbols.pop("tile_k")
+    plan, = tl.lower_ir(text, symbols, dtypes)
+    assert plan.symbols == ["tile_k"]
+    bound = plan.bind_symbols({"tile_k": tile_k})
+    eager, = tl.lower_ir(text, symbols | {"tile_k": tile_k}, dtypes)
+    assert json.loads(bound.metadata_json()) == json.loads(eager.metadata_json())
+
+
+def test_reader_infers_register_values_instead_of_global_scratch():
+    def view(role, name):
+        return f"(view ({role} {name}) (layout (axis m 16)))"
+    ix = "(keyed_index (slot m fulltile))"
+    text = f'''(ploop 0 1 1 p (seq
+      (store {view('tensor', 'T')} (sqr (load {view('input', 'X')} {ix})) {ix})
+      (store {view('output', 'Y')} (sigmoid (load {view('tensor', 'T')} {ix})) {ix})))'''
+    plan, = tl.lower_ir(text, {}, {n: "fp32" for n in ("X", "T", "Y")})
+    metadata = json.loads(plan.metadata_json())
+    storage = {v["value"]: v["storage"] for v in metadata["values"]}
+    t = metadata["operations"][0]["outflows"][0]
+    assert storage[t] == "register"
+    assert storage[metadata["inputs"][0]["value"]] == "external"
+    assert storage[metadata["outputs"][0]["value"]] == "external"
+    assert len(tl.emit(plan).requirements.buffers) == 2
 
 
 @pytest.mark.gpu

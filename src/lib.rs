@@ -32,8 +32,9 @@ pub use implementation::{
 };
 pub use plan::{
     AccessIndex, Constant, Expression, IndexExpr, IrConfig, IrError, Loop, LoopDomain, LoopKind,
-    Operation, OperationId, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder, Statement,
-    Storage, TensorAccess, TensorBinding, ValueInstance, ValueInstanceId, lower_ir,
+    Operation, OperationId, PhysicalInvariantError, PhysicalPlan, PhysicalPlanBuilder,
+    ScheduledConfig, Statement, Storage, TensorAccess, TensorBinding, TileWidth, ValueInstance,
+    ValueInstanceId, ValueOp, lower_ir,
 };
 pub use platform::{AsStr, CudaTargetCapability, TargetCapability};
 

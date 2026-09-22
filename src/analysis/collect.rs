@@ -46,7 +46,7 @@ pub fn analyze(root: IrNode) -> Result<ScheduledIr, AnalysisError> {
     let mut collector = Collector::default();
     collector.program(&root)?;
     Ok(ScheduledIr {
-        ir: root,
+        ir: Some(root),
         tensors: collector.tensors,
         kernels: collector.kernels,
         scopes: collector.scopes,
@@ -154,7 +154,10 @@ impl Collector {
             "store" => self.store(node, scope),
             _ => Err(invalid(
                 node,
-                "expected seq, ploop, sloop, mloop, store or dummy",
+                format!(
+                    "unsupported program node {}; expected seq, ploop, sloop, mloop, store or dummy",
+                    node.head()
+                ),
             )),
         }
     }

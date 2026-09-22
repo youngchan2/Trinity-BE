@@ -84,19 +84,34 @@ impl PhysicalPlanBuilder {
         output_tensor: impl Into<String>,
         output_value: ValueInstanceId,
     ) -> Result<PhysicalPlan, PhysicalInvariantError> {
-        let output = TensorBinding::new(output_tensor, output_value);
+        self.build_program(
+            statements,
+            vec![TensorBinding::new(output_tensor, output_value)],
+            Default::default(),
+            Default::default(),
+        )
+    }
 
+    pub(super) fn build_program(
+        self,
+        statements: Vec<Statement>,
+        outputs: Vec<TensorBinding>,
+        mutable_inputs: BTreeSet<ValueInstanceId>,
+        bindings: std::collections::BTreeMap<String, i64>,
+    ) -> Result<PhysicalPlan, PhysicalInvariantError> {
         let PhysicalPlanBuilder {
             target,
             world_size,
             mut inputs,
             values,
-            operations,
+            mut operations,
         } = self;
 
         validate_world_size(world_size)?;
-        validate_name(&output.tensor)?;
-        validate_value_id(output.value, values.len(), "output binding")?;
+        for output in &outputs {
+            validate_name(&output.tensor)?;
+            validate_value_id(output.value, values.len(), "output binding")?;
+        }
         validate_membership(&statements, operations.len())?;
 
         let (input_values, _) = validate_inputs(&inputs, values.len())?;
@@ -104,23 +119,31 @@ impl PhysicalPlanBuilder {
         for (_, op) in operations.iter() {
             for access in op.expression.accesses() {
                 validate_value_id(access.value, values.len(), "expression operand")?;
-                if access.indices.len() != values.values[access.value.index()].shape().len() {
-                    return Err(PhysicalInvariantError::InvalidProgram(
-                        "access rank differs from value".into(),
-                    ));
-                }
+                access
+                    .validate_view(values.values[access.value.index()].shape())
+                    .map_err(PhysicalInvariantError::InvalidProgram)?;
             }
             for &id in op.inflows.iter().chain(&op.outflows) {
                 validate_value_id(id, values.len(), "operation operand")?;
             }
 
             for id in &op.outflows {
-                if input_values.contains(id) {
+                if input_values.contains(id) && !mutable_inputs.contains(id) {
                     return Err(PhysicalInvariantError::BoundaryInputHasProducer {
                         value: id.index(),
                     });
                 }
             }
+        }
+
+        // An explicit base-shape view and the default view are the same access.
+        for op in &mut operations.values {
+            op.expression.map_accesses(&mut |access| {
+                if access.view_shape.as_deref() == Some(values.values[access.value.index()].shape())
+                {
+                    access.view_shape = None;
+                }
+            });
         }
 
         inputs.sort_by(|a, b| a.tensor.cmp(&b.tensor));
@@ -132,7 +155,9 @@ impl PhysicalPlanBuilder {
             value_instances: values,
             operations,
             statements,
-            output,
+            outputs: outputs.into_boxed_slice(),
+            mutable_inputs,
+            bindings,
             hash: 0,
         };
 
@@ -158,7 +183,7 @@ fn validate_program(
     let fail = |s: &str| PhysicalInvariantError::InvalidProgram(s.into());
 
     for (id, value) in plan.value_instances.iter() {
-        let boundary = inputs.contains(&id) || id == plan.output.value;
+        let boundary = inputs.contains(&id) || plan.outputs.iter().any(|o| o.value == id);
 
         // Input and output bindings must refer to values in External storage.
         if boundary && value.storage != Storage::External {
@@ -178,7 +203,7 @@ fn validate_program(
 
     validate_statements(plan, &plan.statements, &mut available, &mut BTreeSet::new())?;
 
-    if !available.contains(&plan.output.value) {
+    if plan.outputs.iter().any(|o| !available.contains(&o.value)) {
         return Err(fail("output has no producer"));
     }
 
@@ -193,6 +218,7 @@ fn validate_statements(
 ) -> Result<(), PhysicalInvariantError> {
     for statement in statements {
         match statement {
+            Statement::Region(body) => validate_statements(plan, body, available, scope)?,
             Statement::Loop(l) => {
                 validate_loop(plan, l, available, scope)?;
             }
@@ -233,6 +259,24 @@ fn validate_operation(
     scope: &BTreeSet<String>,
 ) -> Result<(), PhysicalInvariantError> {
     for access in op.expression.accesses() {
+        for index in &access.indices {
+            if let super::AccessIndex::Slice { width, .. }
+            | super::AccessIndex::Tile { width, .. }
+            | super::AccessIndex::ClippedTile { width, .. } = index
+            {
+                if let super::TileWidth::Symbol(name) = width {
+                    if !super::expression::is_symbol(name) || scope.contains(name) {
+                        return Err(PhysicalInvariantError::InvalidProgram(format!(
+                            "tile width {name} must name a configuration symbol, not a loop coordinate"
+                        )));
+                    }
+                } else {
+                    width
+                        .resolve(&Default::default())
+                        .map_err(PhysicalInvariantError::InvalidProgram)?;
+                }
+            }
+        }
         for variable in access
             .indices
             .iter()
@@ -247,7 +291,7 @@ fn validate_operation(
     }
 
     for inflow in &op.inflows {
-        if !available.contains(inflow) {
+        if !available.contains(inflow) && !op.zero_init.contains(inflow) {
             return Err(PhysicalInvariantError::MissingProducer {
                 value: inflow.index(),
             });

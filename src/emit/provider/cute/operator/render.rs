@@ -25,6 +25,7 @@ pub(super) use crate::emit::provider::render_index_expression;
 
 pub(super) fn cpp_type(dtype: DType) -> &'static str {
     match dtype {
+        DType::Fp16 => "cutlass::half_t",
         DType::Fp32 => "float",
         DType::Bf16 => "cutlass::bfloat16_t",
     }

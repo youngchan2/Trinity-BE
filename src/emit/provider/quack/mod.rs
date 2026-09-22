@@ -109,6 +109,11 @@ impl KernelProvider for QuackKernelProvider {
         let lhs = argument(&request, pattern.lhs, 2)?;
         let rhs = argument(&request, pattern.rhs, 2)?;
         let output = argument(&request, pattern.output, 2)?;
+        if request.tensors.values().any(|v| v.dtype == DType::Fp16) {
+            return Err(unsupported(
+                "Quack adapter currently supports BF16/FP32 storage",
+            ));
+        }
         if lhs.dtype != DType::Bf16 || rhs.dtype != DType::Bf16 {
             return Err(unsupported(
                 "Quack adapter currently requires BF16 matrix inputs",
@@ -177,6 +182,11 @@ fn argument(
         .tensors
         .get(&access.value)
         .ok_or_else(|| ProviderError::Failed("missing operand".into()))?;
+    if access.shape(&value.shape) != value.shape {
+        return Err(unsupported(
+            "Quack host adapter does not yet bind per-access views",
+        ));
+    }
     if value.shape.len() != rank {
         return Err(unsupported(
             "Quack adapter requires operands of the expected rank",

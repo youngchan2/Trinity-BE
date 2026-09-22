@@ -135,6 +135,7 @@ fn visit<'p>(
 ) -> Result<(), EmitError> {
     for statement in statements {
         match statement {
+            Statement::Region(body) => visit(prepared, providers, body, loops, result)?,
             Statement::Loop(l) => {
                 loops.push(l);
                 visit(prepared, providers, &l.body, loops, result)?;

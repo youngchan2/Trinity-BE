@@ -62,17 +62,17 @@ impl Case {
         builder.bind_input("B", b);
         let mi = I::ClippedTile {
             variable: "m".into(),
-            width: self.rows,
+            width: self.rows.into(),
         };
 
         let ni = I::Tile {
             variable: "n".into(),
-            width: 128,
+            width: 128usize.into(),
         };
 
         let ki = I::Tile {
             variable: "k".into(),
-            width: self.width,
+            width: self.width.into(),
         };
 
         let output = TensorAccess::new(c, [mi.clone(), ni.clone()]);

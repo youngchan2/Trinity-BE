@@ -56,12 +56,12 @@ fn tile(name: &str, width: usize, clipped: bool) -> I {
     if clipped {
         I::ClippedTile {
             variable: name.into(),
-            width,
+            width: width.into(),
         }
     } else {
         I::Tile {
             variable: name.into(),
-            width,
+            width: width.into(),
         }
     }
 }

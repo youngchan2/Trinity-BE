@@ -1,7 +1,7 @@
 //! Read IR into an explicit physical program, preserving its loops and accesses.
 use super::{
     AccessIndex, Constant, Expression, IndexExpr, Loop, LoopDomain, LoopKind, PhysicalPlan,
-    PhysicalPlanBuilder, Statement, Storage, TensorAccess, ValueInstanceId,
+    PhysicalPlanBuilder, Statement, Storage, TensorAccess, TileWidth, ValueInstanceId,
 };
 use crate::{CudaTargetCapability, DType, TargetCapability};
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,15 +74,36 @@ impl Node {
     }
 }
 
-/// Reads an explicit program whose loop ranges and memory accesses are validated by its producer.
+/// Read an explicit program, preserving its schedule and inferring value storage
+/// through the same common analysis as `PhysicalPlanBuilder::from_scheduled`.
 pub fn lower_ir(text: &str, config: &IrConfig) -> Result<Vec<PhysicalPlan>, IrError> {
     let node = parse(text)?;
+    let ir = crate::analysis::analyze_text(text).map_err(|e| {
+        let offset = match &e {
+            crate::analysis::AnalysisError::InvalidIr { span, .. } => {
+                span.as_ref().map_or(0, |s| s.start)
+            }
+            _ => 0,
+        };
+        error(offset, e.to_string())
+    })?;
+    let mut bindings = crate::analysis::Bindings {
+        shapes: BTreeMap::new(),
+        symbols: config.symbols.clone(),
+    };
+    let storage = crate::analysis::storage::infer_source(&ir, &mut bindings)
+        .map_err(|e| error(0, e.to_string()))?;
 
     let mut reader = Reader {
         config,
         builder: PhysicalPlanBuilder::new(config.target, config.world_size),
         tensors: BTreeMap::new(),
         output: None,
+        storage: storage
+            .values
+            .into_iter()
+            .map(|(id, class)| (ir.tensor(id).name.clone(), class))
+            .collect(),
     };
     reader.collect(&node)?;
 
@@ -171,6 +192,7 @@ struct Reader<'a> {
     builder: PhysicalPlanBuilder,
     tensors: BTreeMap<String, (ValueInstanceId, String, Vec<usize>)>,
     output: Option<(String, ValueInstanceId)>,
+    storage: BTreeMap<String, Storage>,
 }
 
 impl PhysicalPlanBuilder {
@@ -339,9 +361,6 @@ impl Decoder<'_> {
             return Err(error(base[0].offset, format!("ambiguous tensor {name}")));
         }
         let layout = &view[1].children[1..];
-        if layout.len() != value.shape().len() {
-            return Err(error(view[1].offset, "view rank differs from value"));
-        }
         let mut slots = BTreeMap::new();
         for slot in &index.children[1..] {
             if slot.op() != "slot" {
@@ -354,7 +373,8 @@ impl Decoder<'_> {
         }
         let mut axes = BTreeSet::new();
         let mut indices = Vec::new();
-        for (axis, &size) in layout.iter().zip(value.shape()) {
+        let mut shape = Vec::new();
+        for axis in layout {
             if axis.op() != "axis" {
                 return Err(error(axis.offset, "expected layout axis"));
             }
@@ -363,9 +383,7 @@ impl Decoder<'_> {
             if !axes.insert(label) {
                 return Err(error(axis.offset, "duplicate layout axis"));
             }
-            if self.extent(&args[1])? != size {
-                return Err(error(axis.offset, "view extent differs from value"));
-            }
+            shape.push(self.extent(&args[1])?);
             indices.push(match slots.remove(label) {
                 None => AccessIndex::FullTile,
                 Some(index) if index.text.as_deref() == Some("fulltile") => AccessIndex::FullTile,
@@ -375,7 +393,23 @@ impl Decoder<'_> {
         if !slots.is_empty() {
             return Err(error(index.offset, "index slot absent from view"));
         }
-        Ok(TensorAccess::new(id, indices))
+        let mut access = TensorAccess::new(id, indices);
+        if shape != value.shape() {
+            access = access.with_view_shape(shape);
+        }
+        access
+            .validate_view(value.shape())
+            .map_err(|e| error(view[1].offset, e))?;
+        Ok(access)
+    }
+
+    fn tile_width(&self, node: &Node) -> Result<TileWidth, IrError> {
+        let atom = node.atom()?;
+        if super::expression::is_symbol(atom) && !self.symbols.contains_key(atom) {
+            Ok(TileWidth::Symbol(atom.into()))
+        } else {
+            self.extent(node).map(TileWidth::Constant)
+        }
     }
 
     fn access_index(&self, node: &Node) -> Result<AccessIndex, IrError> {
@@ -393,11 +427,11 @@ impl Decoder<'_> {
         Ok(match node.op() {
             "tile" => AccessIndex::Tile {
                 variable,
-                width: self.extent(&args[1])?,
+                width: self.tile_width(&args[1])?,
             },
             "clipped_tile" => AccessIndex::ClippedTile {
                 variable,
-                width: self.extent(&args[1])?,
+                width: self.tile_width(&args[1])?,
             },
             _ => AccessIndex::Elem(variable),
         })
@@ -414,7 +448,9 @@ impl Reader<'_> {
     }
     fn index(&self, n: &Node, scope: &BTreeSet<String>) -> Result<IndexExpr, IrError> {
         if let Some(a) = n.text.as_deref() {
-            return if scope.contains(a) {
+            return if scope.contains(a)
+                || (super::expression::is_symbol(a) && !self.config.symbols.contains_key(a))
+            {
                 Ok(IndexExpr::Variable(a.into()))
             } else {
                 self.number(n).map(IndexExpr::Constant)
@@ -463,7 +499,11 @@ impl Reader<'_> {
                 return Err(error(n.offset, "supported tensor ranks are 1, 2, 3"));
             }
             if let Some((_, old_role, old_shape)) = self.tensors.get(&name) {
-                if old_role != role || old_shape != &shape {
+                let elements =
+                    super::expression::element_count(&shape).map_err(|e| error(n.offset, e))?;
+                let old_elements =
+                    super::expression::element_count(old_shape).map_err(|e| error(n.offset, e))?;
+                if old_role != role || old_elements != elements {
                     return Err(error(n.offset, format!("inconsistent view for {name}")));
                 }
             } else {
@@ -472,11 +512,7 @@ impl Reader<'_> {
                     .dtypes
                     .get(&name)
                     .ok_or_else(|| error(n.offset, format!("missing dtype for {name}")))?;
-                let storage = if role == "tensor" {
-                    Storage::Global
-                } else {
-                    Storage::External
-                };
+                let storage = self.storage[&name];
                 let id = self
                     .builder
                     .add_named_value(&name, dtype, shape.iter().copied(), storage);
@@ -557,15 +593,23 @@ impl Reader<'_> {
                         .stop
                         .evaluate(&empty)
                         .map_err(|e| error(n.offset, e))?;
-                    let step = domain
-                        .step
-                        .evaluate(&empty)
-                        .map_err(|e| error(n.offset, e))?;
+                    let mut step_symbols = BTreeSet::new();
+                    super::bindings::free_symbols(&domain.step, scope, &mut step_symbols);
+                    let step = if step_symbols.is_empty() {
+                        Some(
+                            domain
+                                .step
+                                .evaluate(&empty)
+                                .map_err(|e| error(n.offset, e))?,
+                        )
+                    } else {
+                        None
+                    };
                     if count <= 0
-                        || step <= 0
                         || stop <= start
                         || (stop - start) % count != 0
-                        || ((stop - start) / count) % step != 0
+                        || step
+                            .is_some_and(|step| step <= 0 || ((stop - start) / count) % step != 0)
                     {
                         return Err(error(
                             n.offset,

@@ -43,9 +43,12 @@ fn alpha_renaming_is_canonical_and_errors_are_located() {
     assert!(a.same_body(&b));
     let mut c = config(1, 4);
     c.symbols.remove("tile_k");
-    let e = lower_ir(FFN, &c).err().unwrap();
-    assert!(e.offset > 0);
-    assert!(e.message.contains("tile_k"));
+    let symbolic = lower_ir(FFN, &c).unwrap().remove(0);
+    assert_eq!(symbolic.symbols(), ["tile_k".into()].into());
+    let bound = symbolic
+        .bind_symbols(&[("tile_k".into(), config(1, 4).symbols["tile_k"])].into())
+        .unwrap();
+    assert!(bound.same_body(&lower_ir(FFN, &config(1, 4)).unwrap().remove(0)));
     let e = lower_ir(&FFN.replace("sigmoid", "unknown_op"), &config(1, 4))
         .err()
         .unwrap();

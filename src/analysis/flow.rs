@@ -26,8 +26,9 @@ pub struct TensorDataflow {
     pub entry_value: EntryValue,
     /// Least enclosing lexical scope of this region's accesses.
     pub common_scope: ScopeId,
-    /// Additive self-updates, including scaled self terms. This does not assert
-    /// zero initialization or the narrower PhysicalPlan reduction convention.
+    /// Additive self-updates, including nested additions and scaled self terms.
+    /// This does not assert zero initialization or the narrower PhysicalPlan
+    /// reduction convention.
     pub additive_updates: BTreeSet<StatementId>,
 }
 
@@ -39,7 +40,7 @@ pub struct KernelDataflow {
     pub loop_dependencies: BTreeMap<TensorId, BTreeSet<ScopeId>>,
 }
 
-pub(super) fn analyze(ir: &ScheduledIr) -> Vec<KernelDataflow> {
+pub(crate) fn analyze(ir: &ScheduledIr) -> Vec<KernelDataflow> {
     let mut previous_definitions = Vec::new();
     let mut previously_written = BTreeSet::new();
     let mut kernels = Vec::new();
@@ -126,6 +127,13 @@ fn additive_update(ir: &ScheduledIr, statement: StatementId, write: AccessId) ->
             ValueExpr::Load(id) => {
                 let a = ir.access(*id);
                 a.tensor == target.tensor && same_region(a, target)
+            }
+            // Extraction can reassociate `acc + rhs` into `rhs1 + (rhs2 + acc)`.
+            // Follow additive paths without rewriting the expression or moving
+            // terms across loops. A self-load under an arbitrary operator (such
+            // as exp or a tensor product) does not establish this recurrence.
+            ValueExpr::Apply(op, args) if op == "+" && args.len() == 2 => {
+                self_term(&args[0], ir, target) || self_term(&args[1], ir, target)
             }
             ValueExpr::Apply(op, args) if op == "*" && args.len() == 2 => {
                 (matches!(&args[0], ValueExpr::Literal(v) if v.parse::<f64>().is_ok_and(f64::is_finite))

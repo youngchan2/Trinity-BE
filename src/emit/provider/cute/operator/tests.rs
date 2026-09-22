@@ -18,7 +18,7 @@ fn builder() -> PhysicalPlanBuilder {
 fn tile(name: &str, width: usize) -> I {
     I::Tile {
         variable: name.into(),
-        width,
+        width: width.into(),
     }
 }
 
@@ -78,7 +78,7 @@ fn reduction(
             I::FullTile,
             I::ClippedTile {
                 variable: "k".into(),
-                width,
+                width: width.into(),
             },
         ],
     ));

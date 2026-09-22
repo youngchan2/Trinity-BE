@@ -135,10 +135,20 @@ fn validate_interface(
             .ok_or("missing port value")?;
 
         if value.dtype() != port.access.dtype
-            || value.shape() != port.access.shape
+            || value.shape() != port.access.value_shape
             || value.storage() != port.access.storage
         {
             return Err("interface value metadata differs from the Plan".into());
+        }
+        if !plan
+            .operation(id)
+            .ok_or("missing interface operation")?
+            .expression()
+            .accesses()
+            .iter()
+            .any(|access| port.access.matches(access))
+        {
+            return Err("interface access/view differs from the Plan".into());
         }
         if value.storage() == Storage::Shared {
             return Err("Shared tensor transport is not supported yet".into());
@@ -163,6 +173,10 @@ fn compose_sequence(
 
     for statement in statements {
         match statement {
+            Statement::Region(body) => {
+                flush(plan, &mut pending, &mut result, kernels)?;
+                result.extend(compose_sequence(plan, body, kernels)?);
+            }
             Statement::Operation(id) => {
                 if kernels[id].specification.iteration().is_some() {
                     return Err(

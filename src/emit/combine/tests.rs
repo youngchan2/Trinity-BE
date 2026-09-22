@@ -72,9 +72,9 @@ fn pipeline(kind: usize, storage: Storage) -> PhysicalPlan {
     let producer = if kind == 0 {
         store(&mut b, r, rank, &[x], E::Sqr(Box::new(load(x, rank))))
     } else {
-        let tile = |width| I::Tile {
+        let tile = |width: usize| I::Tile {
             variable: "k".into(),
-            width,
+            width: width.into(),
         };
         let rhs = if kind == 1 {
             let weight = b.add_value(DType::Bf16, [256, 128], Storage::External);
@@ -91,7 +91,7 @@ fn pipeline(kind: usize, storage: Storage) -> PhysicalPlan {
                         I::FullTile,
                         I::ClippedTile {
                             variable: "k".into(),
-                            width: 65,
+                            width: 65usize.into(),
                         },
                     ],
                 ))),
@@ -460,7 +460,7 @@ fn subgroup_pipeline() -> PhysicalPlan {
                         I::FullTile,
                         I::ClippedTile {
                             variable: "k".into(),
-                            width: 65,
+                            width: 65usize.into(),
                         },
                     ],
                 ))),
@@ -586,6 +586,7 @@ fn mixed_thread_bodies_compile_with_nvcc() {
                 format!(
                     "{}* buffer{}",
                     match v.dtype() {
+                        DType::Fp16 => "cutlass::half_t",
                         DType::Fp32 => "float",
                         DType::Bf16 => "cutlass::bfloat16_t",
                     },

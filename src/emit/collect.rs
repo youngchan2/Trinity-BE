@@ -45,6 +45,7 @@ fn visit<'plan, 'provider>(
 ) -> Result<(), EmitError> {
     for statement in statements {
         match statement {
+            Statement::Region(body) => visit(prepared, execution, providers, body, loops, kernels)?,
             Statement::Loop(loop_) => {
                 loops.push(loop_);
 
