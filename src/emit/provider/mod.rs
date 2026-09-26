@@ -6,6 +6,7 @@ use crate::{Loop, OperationId};
 use thiserror::Error;
 
 pub(super) mod cute;
+pub(crate) mod python;
 pub(super) mod quack;
 pub mod triton;
 pub(super) use cute::CuTeKernelProvider;

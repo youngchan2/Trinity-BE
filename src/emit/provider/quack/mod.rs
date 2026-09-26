@@ -8,6 +8,7 @@ use crate::emit::request::KernelRequest;
 pub use crate::emit::request::TensorArgument;
 use crate::{CudaTargetCapability, DType, Expression as E, TargetCapability, TensorAccess};
 
+mod finalized;
 pub(crate) mod recognition;
 pub use recognition::{QuackPatternAnalysis, QuackPatternKind};
 pub(crate) mod pattern;

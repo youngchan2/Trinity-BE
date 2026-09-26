@@ -24,6 +24,7 @@ pub use provider::quack::{
 };
 pub use provider::triton::TritonSpecification;
 pub use provider::triton::{TritonKernelProvider, TritonProgram};
+pub use wrapper::{PythonExecutable, PythonProvider, PythonSelection, emit_python_executable};
 pub use wrapper::{PythonProgram, emit_python};
 
 /// Emit an ordered single-GPU program through the Triton fallback provider.

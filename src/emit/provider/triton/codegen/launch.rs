@@ -60,7 +60,12 @@ impl TritonPlan {
     }
 
     pub(super) fn launch_prelude(&self, w: &mut CodegenContext) {
-        for (ki, kernel) in self.kernels.iter().enumerate() {
+        self.launch_prelude_for(&(0..self.kernels.len()).collect::<Vec<_>>(), w);
+    }
+
+    pub(super) fn launch_prelude_for(&self, indices: &[usize], w: &mut CodegenContext) {
+        for &ki in indices {
+            let kernel = &self.kernels[ki];
             w.line(format!("KERNEL_{ki}_CONFIGS = ["));
             w.indent = 1;
             for config in &self.tuning[ki] {

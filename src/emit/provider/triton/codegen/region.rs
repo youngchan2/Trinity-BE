@@ -2,6 +2,60 @@
 //! is extracted from a region and no cross-region split parameter is guessed.
 use super::{CodegenContext, TritonPlan};
 impl TritonPlan {
+    /// Definition plus a named launch function. ABI validation/allocation are
+    /// shared at program entry, not repeated in every region's launch wrapper.
+    pub(crate) fn python_kernel(
+        &self,
+        index: usize,
+    ) -> Result<crate::emit::provider::python::PythonKernel, String> {
+        use crate::emit::provider::python::PythonKernel;
+        let kernel = self.kernels.get(index).ok_or("missing Triton region")?;
+        if !self.metadata.split_owners.is_empty() {
+            return Err("fixed region composition does not carry cross-region split tuning parameters; use emit_triton for that program".into());
+        }
+        let tensors: Vec<_> = self
+            .tensor_order(kernel)
+            .into_iter()
+            .filter(|t| kernel.tensors[t].has_global())
+            .collect();
+        let mut w = CodegenContext::default();
+        self.launch_prelude_for(&[index], &mut w);
+        self.kernel(index, kernel, &mut w);
+        let entrypoint = format!("_run_triton_{index}");
+        w.line(format!(
+            "def {entrypoint}({}):",
+            tensors
+                .iter()
+                .map(|t| self.tensor_name(*t))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        w.indent = 1;
+        for (symbol, value) in &self.options.symbols {
+            w.line(format!("{} = {value}", self.parameter(symbol)));
+        }
+        for (symbol, (tensor, axis)) in &self.common.metadata.dimensions {
+            let value = self.options.shapes[&self.analysis.tensor(*tensor).name][*axis];
+            w.line(format!("{} = {value}", self.parameter(symbol)));
+        }
+        self.kernel_launch(index, kernel, &mut w);
+        w.indent = 0;
+        Ok(PythonKernel {
+            entrypoint,
+            arguments: tensors
+                .iter()
+                .map(|t| crate::ValueInstanceId::from_index(t.index()))
+                .collect(),
+            source: w.source,
+            imports: [
+                "import triton".into(),
+                "import triton.language as tl".into(),
+            ]
+            .into(),
+            helpers: Default::default(),
+        })
+    }
+
     pub fn emit_region(&self, index: usize) -> Result<String, String> {
         let kernel = self.kernels.get(index).ok_or("missing Triton region")?;
         if !self.metadata.split_owners.is_empty() {

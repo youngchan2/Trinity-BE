@@ -144,6 +144,7 @@ These remain distinct paths; Native CUDA is not in the Python autotuner:
 | `region_candidates` | Complete region → original Triton kernel or Quack API call | Source/discovery only |
 | `emit_python` independent-operation path | Supported loop-free memory operations | Correctness and timing comparison |
 | `emit_python` region path | Eligible scheduled regions, fixed shapes, one output, no mutation | Triton/Quack comparison per complete region |
+| `emit_python_executable` | Fixed-shape program → selected Triton/Quack functions + named `forward` | Support priority or explicit per-region choices; no timing implied |
 | Native `emit` | CuTe operations → combined CUDA bodies → `CudaSource` | Native priority selection |
 
 `TritonPlan::emit_region(index)` emits the existing kernel with `run(values)` for
@@ -166,6 +167,14 @@ Quack region retain the whole-program `triton_program` path. Its `prepare` binds
 inputs, and invoking the executable compiles/tunes/launches through Triton; it
 does not claim cross-provider comparison or independent correctness validation.
 The manifest retains region pattern/candidate rejection information.
+
+The finalized executable is a separate output path: see
+[Python executable composition](emission.md#선택-완료된-python-실행-파일).
+`TritonPlan::python_kernel(index)` reuses the same body and launch, emits only the
+selected region's configs, and returns ordered common value IDs to the wrapper.
+All output bindings and input updates are preserved in this path; Quack's own
+single-output/non-mutating support restrictions remain. Candidate/reference JSON
+is not embedded in the finalized source. Cross-kernel split tuning is rejected.
 
 `emit(plan)` remains the Native CUDA entry. Native split-loop composition,
 communication and explicit Shared transport are not enabled by this integration.

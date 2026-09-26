@@ -43,10 +43,73 @@ Triton의 target/config와 검증 범위는 [provider 문서](triton-provider.md
 - `region_candidates`: 원본 region/facts를 각 matcher에 전달하고 전체 region의 Triton/Quack 후보를 열거한다. 의미 summary는 선택적이다.
 - `emit_python`: 지원되는 독립 operation 또는 전체 scheduled region의 정확성·시간 비교 프로그램을 만든다.
   영역 비교 조건이 맞지 않으면 기존 Triton 직접 실행으로 연결한다. Native 후보는 아직 비교 실행하지 않는다.
+- `emit_python_executable`: 원본 region마다 구현 하나를 고정하고, 필요한 Triton/Quack 함수와
+  allocation·호출만 포함하는 최종 `forward()` 파일을 만든다. 선택 보고서는 source와 별도로 반환한다.
 
 아래 Native 명세·조합·Streamed 설명과 Persistent/통합 Opaque의 후속 설계를 구분한다.
 현재 공개 함수는 [emit/mod.rs](../../src/emit/mod.rs), 후보는
 [candidate.rs](../../src/emit/candidate.rs), Python 분기는 [wrapper/mod.rs](../../src/emit/wrapper/mod.rs)에 있다.
+
+## 선택 완료된 Python 실행 파일
+
+[`emit_python_executable(plan, selection)`](../../src/emit/wrapper/finalized.rs)은 다음 경로다.
+
+```text
+scheduled IR → 공통 PhysicalPlan / RegionFacts
+  → 전체 region 후보와 지원·거절 이유
+  → PythonSelection으로 region별 구현 하나 고정
+  → provider의 PythonKernel (함수 source + entrypoint + 순서 있는 value ID 인자)
+  → 공통 wrapper: 입력 검사 → Global/External allocation → 원본 순서의 호출 → 모든 출력
+  → PythonExecutable { source, report, providers }
+```
+
+`PythonSelection`은 `PreferQuack`, `TritonOnly`, `Regions(Vec<PythonProvider>)`다.
+기본 `PreferQuack`은 지원되는 Quack을 우선하는 **지원 정책**이며 성능 비교 결과가 아니다.
+외부에서 비교·검증한 region별 선택은 `Regions`로 전달할 수 있다. 현재 비교 프로그램의
+결과를 자동으로 읽어 최종 파일까지 재생성하는 연결은 구현하지 않았다. 명시적 선택이
+미지원이면 오류를 반환한다. 실행 중 선택한 Quack 호출이 실패해도 몰래 Triton으로 바꾸지 않는다.
+
+Provider와 공통 wrapper의 책임은 다음과 같다.
+
+| 위치 | 책임 |
+| --- | --- |
+| [provider/python.rs](../../src/emit/provider/python.rs) | provider 내부 결과 계약: 함수·imports·공유 helper·공통 value ID 인자 |
+| [triton/codegen/region.rs](../../src/emit/provider/triton/codegen/region.rs) | 선택된 kernel/config/prune와 `_run_triton_N` launch 함수; 기존 본문과 launch 로직 재사용 |
+| [quack/finalized.rs](../../src/emit/provider/quack/finalized.rs) | 증명된 명세의 API/view/packing/copy를 `_run_quack_N`으로 구체화; 필요한 분기만 source에 포함 |
+| [wrapper/finalized.rs](../../src/emit/wrapper/finalized.rs) | 선택과 전체 memory boundary 검사, ABI 이름, allocation, 모든 region의 순서, 출력·입력 갱신 보존 |
+
+최종 파일에는 `_MANIFEST`, `_SPEC`, JSON 해석, reference, 후보 benchmark, factory namespace가 없다.
+분석·후보·선택 보고서는 `report()`에만 남는다. 입력 CUDA capability·shape·dtype·contiguity와
+alias 계약은 `forward()`에서 검사한다. Quack API는 해당 함수에서 import하며 첫 호출에 JIT될 수 있고,
+Triton은 기존 autotune 설정을 유지한다. 이 library 내부 tuning과 provider 간 비교는 별개다.
+
+입력과 동일한 output은 새로 할당하지 않는다. 여러 output은 plan의 binding 순서대로 tuple로
+반환하고, 입력 mutation은 원래 buffer에서 진행한다. Register 중간값을 global buffer로 만들지 않는다.
+이는 공통 조합 지원이며 **Quack이 다중 출력·mutation region을 지원한다는 뜻은 아니다**.
+그 region 전체는 Triton에 남는다. Norm·RoPE의 API output copy, 별도 gate/up packing 등
+기존 adapter의 준비 비용도 함수 안에 그대로 남는다.
+
+현재 범위는 고정 shape의 single GPU이며 CUDA native/CuTe artifact 조합은 포함하지 않는다.
+Cross-region split tuning은 이 경로에서 거절하며 기존 `emit_triton`으로 생성할 수 있다.
+Triton 분석은 아직 전체 program 단위이므로 한 region의 lowering 실패가 다른 region의
+Triton 후보 발견에도 영향을 줄 수 있다. Quack matcher의 원본 region 검사는 계속 수행한다.
+
+직접 파일 생성은 다음과 같다. Python frontend/optimizer 연결은 필요하지 않다.
+
+```sh
+cargo run -p trinity-lowering --locked --bin emit_python -- input.ir output.py \
+  --target sm120 --dtype bf16 --selection prefer-quack
+```
+
+`--selection triton`은 전체 fallback, `--providers quack,triton,...`은 모든 원본 region의
+명시적 선택이다. `--bindings config.json`은 선택적으로
+`{"shapes":{"W":[64,64]},"symbols":{"M":32},"dtypes":{"W":"bf16"}}`를 받는다.
+결과는 `output.py`와 `output.selection.json`이며 파일을 import한 뒤
+`forward(**inputs)`를 호출한다. 기본 CLI 설정은 SM120/BF16이다.
+
+구조/coverage/ABI/CLI, library 호출, GPU 실행과 독립 reference 정확성은 각각 구분해
+확인해야 한다. 이번 구현 중 추가한 테스트와 Llama/SwiGLU fixture는 2026-09-26 정리에서
+삭제했다. 최종 실행 파일 경로의 전용 회귀 테스트는 이후 다시 작성할 예정이다.
 
 ## Kernel
 

@@ -18,6 +18,9 @@ PhysicalPlan
   → emit_python → PythonProgram [region_candidates 모드]
       prepare(sample_inputs): reference → 후보 compile/실행 → 정확성 → 시간 비교
       executable(inputs): 선택된 호출들을 원본 영역 순서대로 실행
+  또는
+  → emit_python_executable(plan, selection) → PythonExecutable
+      명시적/지원 우선 선택 → 필요한 provider 함수 → 간결한 forward() 파일
 ```
 
 공통 분석은 원본 식·operation coverage·scope, recurrence 초기값, local producer 연결과
@@ -243,6 +246,14 @@ Reference를 구성하지 못한 region은 원래 Triton을 실행하며
 프로그램별 mutation/multiple outputs 지원 확대, provider 공통 register rounding 계약,
 weight packing cache, Native/CuTe까지의 통합 선택은 별도 작업이다.
 
+최종 source만 필요한 경우에는
+[`emit_python_executable`](emission.md#선택-완료된-python-실행-파일)을 사용한다.
+`quack/finalized.rs`는 같은 `QuackRegionSpecification`을 받아 API 호출/view/packing을
+Rust에서 구체화한다. `_SPEC` JSON과 런타임 패턴 switch를 파일에 싣지 않는다.
+전체 program의 복수 출력·입력 갱신은 공통 wrapper가 보존하며 그 region은 Triton을 쓴다.
+Quack 지원 조건과 계산·cast·copy는 기존 비교용 `run(values)`와 같다.
+`PreferQuack` 선택은 속도/정확성이 확인됐다는 표시가 아니며 보고서는 source와 분리된다.
+
 ## 검증 기록과 현재 테스트 범위
 
 2026-09-26 커밋 정리 과정에서 미커밋으로 추가했던 pattern/Quack/RoPE/실행 파일 테스트와
@@ -254,6 +265,9 @@ Llama/SwiGLU fixture를 삭제했다. 해당 기능의 전용 회귀 테스트�
 - PRO 5000 SM120, Quack 0.6.5, Triton 3.8.0에서 BF16/FP16 RoPE Quack 12개와
   Triton 10개 호출이 `rtol=.01, atol=.001` 기준을 통과했다. Half/adjacent,
   token 축 재배치/conjugate, partial half, projection과 N=48 Quack-only를 포함한다.
+- 최종 실행 파일 경로의 작은 입력 22개도 같은 환경/오차 기준을 통과했다.
+  Quack-only/혼합/Triton-only 연결, GEMM+SiLU, norm/softmax, separate/packed SwiGLU,
+  RoPE, alias·복수 출력·mutation을 포함한다. Mutation은 정확히 일치했다.
 - 위 GPU 검증은 Quack GEMM `tuned=False`, Triton 첫 config만 사용했으며 성능 비교가 아니다.
   큰 Llama block의 독립 reference 정확성이나 모든 config/하드웨어 검증으로 확대하지 않는다.
 

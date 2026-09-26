@@ -10,6 +10,9 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+mod finalized;
+pub use finalized::{PythonExecutable, PythonProvider, PythonSelection, emit_python_executable};
+
 #[derive(Debug, Clone)]
 pub struct PythonProgram {
     manifest: Value,

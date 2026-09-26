@@ -19,6 +19,7 @@ tensor program plans for the CUDA provider pipeline.
 | A `PhysicalPlan` | `emit::kernel_candidates(&plan)` | CuTe/Triton/Quack candidates and unsupported reasons per operation |
 | Single-GPU computation `PhysicalPlan`, including scheduled loops/regions | `emit::emit_triton(&plan, options)` | Triton kernels and ordered `forward(...)` launches |
 | Single-GPU `PhysicalPlan` | `emit::emit_python(&plan)` | Python `prepare(inputs)` and executable; compares independent operations or runs scheduled regions through Triton |
+| Fixed-shape single-GPU `PhysicalPlan` | `emit::emit_python_executable(&plan, selection)` | Selected Triton/Quack code and named `forward(...)`, with a separate diagnostic report |
 
 The fallback now follows `scheduled IR → PhysicalPlan → TritonKernelProvider →
 TritonPlan → source + launches`. Views, symbolic dimensions, ordered regions,
@@ -26,12 +27,25 @@ loops, outputs and input mutations belong to the common plan. Triton chooses
 padding, local representation, numerical precision and launch configurations.
 It consumes typed plan expressions directly, without reparsing a saved source AST.
 Eligible independent operations and complete scheduled regions can compare
-Triton with Quack through `emit_python`. Quack performs its own whole-region
-pattern/API checks using common region and view facts. Native CUDA implementations
-are not yet part of that Python comparison path.
+Triton with Quack through `emit_python`. Final source export uses
+`emit_python_executable`: a support-priority or explicit per-region choice,
+without embedding reference, candidate JSON or benchmark code. Native CUDA
+implementations are not yet part of that Python execution path.
 Unannotated source IR defaults to FP16; typed Triton candidates preserve explicit
 FP16/BF16/FP32 storage. Native CUDA continues to require BF16/FP32.
 The former CUDA `lower_loop_ir` API is now named `lower_ir`.
+
+Generate a final executable directly from a scheduled IR file:
+
+```sh
+cargo run -p trinity-lowering --locked --bin emit_python -- input.ir output.py \
+  --target sm120 --dtype bf16 --selection prefer-quack
+```
+
+The result is `output.py` (import and call `forward(**inputs)`) plus
+`output.selection.json`. `prefer-quack` is support priority, not a performance
+claim; use `--selection triton` for fallback only, or `--providers quack,triton,...`
+to supply a choice for every region. See [the emission contract](docs/architecture/emission.md#선택-완료된-python-실행-파일).
 
 ## Getting started
 

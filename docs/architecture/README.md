@@ -97,6 +97,8 @@ src/
 
 영역 단위 Quack 연결은 [Quack provider](quack-provider.md)를 따른다. 기존 독립 operation 후보와
 Native 경로를 유지하면서, 별도 `region_candidates` 계약으로 scheduled region 비교를 연결한다.
+최종 실행 파일은 [`emit_python_executable`](emission.md#선택-완료된-python-실행-파일)로
+선택된 함수와 간결한 `forward()`만 생성한다. 비교용 `emit_python`과 진단 보고서는 별개다.
 
 ## 탐색
 
@@ -123,5 +125,7 @@ Native 경로를 유지하면서, 별도 `region_candidates` 계약으로 schedu
 | Triton program provider     | [emit/provider/triton/program.rs](../../src/emit/provider/triton/program.rs) |
 | Triton lowering·codegen     | [emit/provider/triton/lowering/mod.rs](../../src/emit/provider/triton/lowering/mod.rs), [emit/provider/triton/codegen/mod.rs](../../src/emit/provider/triton/codegen/mod.rs) |
 | 후보 발견·Python 실행 구성  | [emit/candidate.rs](../../src/emit/candidate.rs), [emit/wrapper/mod.rs](../../src/emit/wrapper/mod.rs) |
+| 최종 Triton/Quack 파일 구성 | [emit/wrapper/finalized.rs](../../src/emit/wrapper/finalized.rs), [emit/provider/python.rs](../../src/emit/provider/python.rs) |
+| IR 파일 → Python 파일 CLI | [bin/emit_python.rs](../../src/bin/emit_python.rs) |
 | CUDA 소스·Body 렌더링       | [emit/native/cuda/render.rs](../../src/emit/native/cuda/render.rs)                                                                                                 |
 | compile/link와 artifact     | [compile/cuda/mod.rs](../../src/compile/cuda/mod.rs), [compile/cuda/artifact.rs](../../src/compile/cuda/artifact.rs)                                 |
