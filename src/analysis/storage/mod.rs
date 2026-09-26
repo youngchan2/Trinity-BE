@@ -60,6 +60,9 @@ pub struct LocalRead {
     pub definition: AccessId,
     /// Corresponding storage axes, excluding statically singleton view axes.
     pub axes: Vec<(usize, usize)>,
+    /// Exact contiguous final-axis factorization, before taking a subview.
+    /// Logical extents only; provider padding/layout policy is separate.
+    pub split_last: Option<[usize; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

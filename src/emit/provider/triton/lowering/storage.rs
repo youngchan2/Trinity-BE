@@ -13,6 +13,16 @@ pub(super) fn plan_kernel(
     storage: &KernelStoragePlan,
 ) -> Result<KernelPlan, Error> {
     let kernel = &ir.kernels()[ki];
+    for read in storage.local_reads.values() {
+        if read
+            .split_last
+            .is_some_and(|f| f.iter().any(|n| !n.is_power_of_two()))
+        {
+            return Err(invalid(
+                "Triton register final-axis factorization currently requires power-of-two factors to preserve padding positions",
+            ));
+        }
+    }
     let mut parallel = Vec::new();
     for (si, scope) in ir
         .scopes()

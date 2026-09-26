@@ -264,6 +264,26 @@ impl TritonPlan {
                 let bw = self.logical_extent(right, *axis);
                 shape[*axis] = format!("triton.next_power_of_2(({aw}) + ({bw}))");
                 let coordinate = format!("tl.arange(0, {})", shape[*axis]);
+                // Dense equal-width concatenation is an ordered join/reshape.
+                // Avoid manufacturing repeated gather users (which can also
+                // trigger Triton 3.8's OptimizeThreadLocality assertion).
+                // Padding or unequal widths still need the generic gather path.
+                w.line(format!(
+                    "if ({aw}) == ({bw}) and ({aw}) == ({}) and ({bw}) == ({}):",
+                    a.shape[*axis], b.shape[*axis]
+                ));
+                w.indent += 1;
+                let joined = w.temporary(format!("tl.cat({}, {}, dim={axis})", a.code, b.code));
+                let av = a.valid[*axis]
+                    .clone()
+                    .unwrap_or_else(|| format!("tl.full(({},), True, tl.int1)", a.shape[*axis]));
+                let bv = b.valid[*axis]
+                    .clone()
+                    .unwrap_or_else(|| format!("tl.full(({},), True, tl.int1)", b.shape[*axis]));
+                let joined_valid = w.temporary(format!("tl.cat({av}, {bv}, dim=0)"));
+                w.indent -= 1;
+                w.line("else:");
+                w.indent += 1;
                 let ai = format!("tl.minimum({coordinate}, {} - 1)", a.shape[*axis]);
                 let bi = format!(
                     "tl.minimum(tl.maximum({coordinate} - ({aw}), 0), {} - 1)",
@@ -295,14 +315,15 @@ impl TritonPlan {
                     .as_ref()
                     .map(|p| format!("tl.gather({p}, {bi}, axis=0)"))
                     .unwrap_or("True".into());
-                valid[*axis] = Some(format!(
-                    "({coordinate} < ({aw}) + ({bw})) & tl.where({coordinate} < ({aw}), {av}, {bv})"
+                w.line(format!(
+                    "{joined} = tl.where(({coordinate} < ({aw}))[{}], {ga}, {gb})",
+                    Self::slice(shape.len(), *axis)
                 ));
+                w.line(format!("{joined_valid} = ({coordinate} < ({aw}) + ({bw})) & tl.where({coordinate} < ({aw}), {av}, {bv})"));
+                w.indent -= 1;
+                valid[*axis] = Some(joined_valid);
                 EmittedValue {
-                    code: format!(
-                        "tl.where(({coordinate} < ({aw}))[{}], {ga}, {gb})",
-                        Self::slice(shape.len(), *axis)
-                    ),
+                    code: joined,
                     shape,
                     valid,
                     zero_invalid: false,

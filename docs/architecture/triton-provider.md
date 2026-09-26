@@ -254,3 +254,15 @@ See [Emission](emission.md) for that path.
 **Open integration decisions:** region/multiple-operation candidate coverage; Native-versus-Triton rounding and
 reference tolerances; library stride/layout/workspace adaptation; combined
 Native/Opaque execution and benchmark selection. These are not completed APIs.
+
+
+## Register views and concatenation
+
+Common `LocalRead.split_last` proves ownership of a full last axis before a
+two-factor view is read. Triton emits reshape/gather and preserves local FP32
+values; non-power-of-two factors are rejected to preserve padding positions.
+
+Equal-width unpadded concat uses ordered `tl.cat`. Unequal or padded concat
+retains the generic gather path. This avoids manufacturing repeated gather users
+in the partial-RoPE case that triggered Triton 3.8's thread-locality assertion.
+IR concatenation order and the original view semantics remain unchanged.

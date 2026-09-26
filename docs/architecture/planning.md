@@ -207,3 +207,8 @@ permute/transpose 및 singleton 축 변환을 해석하며 packing이나 dtype �
 
 `operation_scopes()`와 `emit/prepare.rs`는 연산 분류 없이 원본 operation의 위치를 제공한다.
 Provider는 이 사실과 원본 계산식을 사용해 자체적으로 지원 여부를 판정할 수 있다.
+
+
+공통 local read binding은 prefix 좌표가 같고 writer가 마지막 N 축 전체를 소유할 때
+`[...,N] → [...,P,C]` (`N=P*C`)의 접근을 연결한다. `LocalRead.split_last`에는 논리
+factor만 보관하며 provider의 padding 제약을 공통 view 의미에 넣지 않는다.

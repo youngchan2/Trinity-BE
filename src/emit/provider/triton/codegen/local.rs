@@ -14,7 +14,31 @@ impl TritonPlan {
         let mut code = self.tensor_name(access.tensor).to_owned();
         if let Some(binding) = kernel.local_reads.get(&id) {
             let definition = self.analysis.access(binding.definition);
-            if definition.index != access.index || definition.view_shape != access.view_shape {
+            if let Some(extents) = binding.split_last {
+                let target_shape = self.tile_shape(id);
+                let mut shape = self.tile_shape(binding.definition);
+                shape.pop();
+                shape.extend(extents.map(|n| n.to_string()));
+                code = w.temporary(format!("tl.reshape({code}, {})", tuple(&shape)));
+                for axis in shape.len() - 2..shape.len() {
+                    let a = &self.accesses[id.index()].axes[axis];
+                    let start = self.index(&a.start);
+                    if target_shape[axis] == shape[axis] && start == "0" {
+                        continue;
+                    }
+                    let extent = shape[axis].clone();
+                    shape[axis] = target_shape[axis].clone();
+                    let index = format!(
+                        "tl.broadcast_to((({start}) + tl.arange(0, {}))[{}], {})",
+                        shape[axis],
+                        Self::slice(shape.len(), axis),
+                        tuple(&shape)
+                    );
+                    let index = w.temporary(format!("tl.minimum({index}, {extent} - 1)"));
+                    code = w.temporary(format!("tl.gather({code}, {index}, axis={axis})"));
+                }
+            } else if definition.index != access.index || definition.view_shape != access.view_shape
+            {
                 let source_shape = self.tile_shape(binding.definition);
                 let target_shape = self.tile_shape(id);
                 let mut shape: Vec<_> = binding
