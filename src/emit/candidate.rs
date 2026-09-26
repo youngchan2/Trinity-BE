@@ -6,6 +6,7 @@ use super::prepare::{PreparedPlan, prepare};
 use super::provider::quack::{QuackKernelProvider, QuackSpecification};
 use super::provider::triton::{TritonKernelProvider, TritonSpecification};
 use super::provider::{CuTeKernelProvider, KernelContext, KernelProvider, ProviderError};
+use crate::analysis::regions::OperationScope;
 use crate::emit::native::SpecifiedKernel;
 use crate::{Loop, OperationId, PhysicalPlan, Statement};
 use std::collections::BTreeMap;
@@ -86,6 +87,9 @@ pub struct CandidateRejection {
 
 #[derive(Debug, Clone, Default)]
 pub struct OperationCandidates {
+    /// Exact operation occurrence. Membership in a region does not grant a
+    /// candidate permission to replace the whole region or split its schedule.
+    pub scope: Option<OperationScope>,
     pub candidates: Vec<KernelCandidate>,
     pub rejections: Vec<CandidateRejection>,
 }
@@ -147,7 +151,10 @@ fn visit<'p>(
                     execution: plan_execution(prepared.plan),
                     loops,
                 };
-                let mut entry = OperationCandidates::default();
+                let mut entry = OperationCandidates {
+                    scope: Some(prepared.scopes[operation].clone()),
+                    ..Default::default()
+                };
                 for provider in providers {
                     match provider.candidates(&context) {
                         Ok(specs) if specs.is_empty() => {

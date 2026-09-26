@@ -17,7 +17,9 @@
 mod facts;
 mod ir;
 pub(crate) mod plan;
+pub mod regions;
 pub mod storage;
+pub mod views;
 
 // Preserve the analysis API while grouping its implementations by responsibility.
 pub(crate) use facts::dependencies;

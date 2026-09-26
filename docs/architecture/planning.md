@@ -192,3 +192,18 @@ CuTe는 내부 `KernelContext`와 Native 명세/조합을 사용한다. 이들�
 
 위 항목은 기존 공통 API의 제공 기능으로 간주하지 않는다. 새 provider 작업에서 필요한
 범위를 producer와 consumer 양쪽 테스트와 함께 확정한다.
+
+
+## 공통 region과 접근 view 정보
+
+[RegionFacts](../../src/analysis/regions.rs)는 원본 region의 statement/operation 위치,
+입력, 모든 store, 관측 가능한 store, 입력 갱신 및 producer/consumer 관계를 제공한다.
+`global_values()`는 External/Global storage의 전체 launch 경계를 반환한다.
+`require_single_output()`은 adapter가 호출하는 제한 검사이며 공통 plan의 복수 출력을 없애지 않는다.
+
+[TensorView](../../src/analysis/views.rs)는 기존 contiguous allocation에 대한
+value identity, shape, strides, offset을 보관한다. Full load, 상수 slice/element,
+permute/transpose 및 singleton 축 변환을 해석하며 packing이나 dtype 변환을 결정하지 않는다.
+
+`operation_scopes()`와 `emit/prepare.rs`는 연산 분류 없이 원본 operation의 위치를 제공한다.
+Provider는 이 사실과 원본 계산식을 사용해 자체적으로 지원 여부를 판정할 수 있다.

@@ -63,6 +63,8 @@ src/
 │   ├── ir/              # 공통 syntax, ScheduledIr 수집/표현, PhysicalPlan projection
 │   ├── facts/           # 접근·scope/dependency·flow·shape·logical dtype 사실
 │   ├── storage/         # backing storage, local read/초기화/publication
+│   ├── regions.rs       # 원본 region과 관측 입출력·def-use
+│   ├── views.rs         # 공통 shape/stride/offset 해석
 │   └── plan/            # PhysicalPlan 타입·builder·reader·binding·normalize
 ├── emit/
 │   ├── candidate.rs     # 구현 후보 열거
@@ -117,3 +119,5 @@ src/
 | 후보 발견·Python 실행 구성  | [emit/candidate.rs](../../src/emit/candidate.rs), [emit/wrapper/mod.rs](../../src/emit/wrapper/mod.rs) |
 | CUDA 소스·Body 렌더링       | [emit/native/cuda/render.rs](../../src/emit/native/cuda/render.rs)                                                                                                 |
 | compile/link와 artifact     | [compile/cuda/mod.rs](../../src/compile/cuda/mod.rs), [compile/cuda/artifact.rs](../../src/compile/cuda/artifact.rs)                                 |
+
+공통 region 경계와 접근 view는 [Planning](planning.md#공통-region과-접근-view-정보)을 따른다.
