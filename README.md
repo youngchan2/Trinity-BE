@@ -25,9 +25,10 @@ TritonPlan → source + launches`. Views, symbolic dimensions, ordered regions,
 loops, outputs and input mutations belong to the common plan. Triton chooses
 padding, local representation, numerical precision and launch configurations.
 It consumes typed plan expressions directly, without reparsing a saved source AST.
-Independent full-tensor operations can still compare Triton with Quack. Whole
-scheduled regions currently execute Triton directly; cross-provider benchmarking
-of those regions and native CUDA implementations remains future work.
+Eligible independent operations and complete scheduled regions can compare
+Triton with Quack through `emit_python`. Quack performs its own whole-region
+pattern/API checks using common region and view facts. Native CUDA implementations
+are not yet part of that Python comparison path.
 Unannotated source IR defaults to FP16; typed Triton candidates preserve explicit
 FP16/BF16/FP32 storage. Native CUDA continues to require BF16/FP32.
 The former CUDA `lower_loop_ir` API is now named `lower_ir`.

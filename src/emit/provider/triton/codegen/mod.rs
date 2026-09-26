@@ -5,6 +5,7 @@ mod kernel;
 mod launch;
 mod local;
 mod ops;
+mod region;
 mod scalar;
 mod wrapper;
 

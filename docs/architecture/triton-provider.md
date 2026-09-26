@@ -135,35 +135,43 @@ or import `program.py`, call `executable = prepare(inputs)`, then
 
 ## Selection boundary and current limits
 
-These are separate implemented entry paths, not one integrated autotuner:
+These remain distinct paths; Native CUDA is not in the Python autotuner:
 
 | Entry | Scope and output | Selection |
 | --- | --- | --- |
-| `TritonKernelProvider::lower_source/lower_program`, `emit_triton` | Whole scheduled program → `TritonPlan` → kernel source + ordered `forward` | Direct fallback, no other provider comparison |
-| `kernel_candidates` | One `OperationId` in its loop context → alternatives/rejections | Discovery only; no import, compilation or benchmark |
-| `emit_python` independent-operation path | Loop-free, single-output, resolved-dtype full-memory operations with supported reference | Python source can compare executable Triton/Quack candidates |
-| Native `emit` | Supported CuTe operations → combined CUDA bodies → `CudaSource` | Current native priority selection; no Triton/Quack timing comparison |
+| `TritonKernelProvider::lower_source/lower_program`, `emit_triton` | Whole scheduled program → `TritonPlan` → source + ordered `forward` | Direct fallback |
+| `kernel_candidates` | One operation → implementations/rejections | Discovery only |
+| `region_candidates` | Complete region → original Triton kernel or Quack API call | Source/discovery only |
+| `emit_python` independent-operation path | Supported loop-free memory operations | Correctness and timing comparison |
+| `emit_python` region path | Eligible scheduled regions, fixed shapes, one output, no mutation | Triton/Quack comparison per complete region |
+| Native `emit` | CuTe operations → combined CUDA bodies → `CudaSource` | Native priority selection |
 
-`emit_python` switches to the whole-program Triton path for regions/loops,
-multiple outputs, input mutation, or expressions
-unsupported by its independent PyTorch reference. Its `comparison: not_performed`
-report is intentional; `prepare` in that path does not certify accuracy.
+`TritonPlan::emit_region(index)` emits the existing kernel with `run(values)` for
+caller-owned global buffers. It reuses ordinary `kernel_launch`, preserving the
+original schedule, tile policy and source body. Cross-kernel split tuning is not
+supported by this adapter; `emit_triton` retains its existing full-program path.
 
+Scheduled `emit_python` tries the region comparison path when at least one Quack
+candidate exists and each region has an implementation plus a reference (or
+direct Triton fallback without comparison). Providers receive original
+`RegionFacts`; common classification/summary success is optional. A Triton
+lowering rejection does not prevent a Quack-only region with a reference from
+being used. Quack never substitutes a fragment inside a larger region.
+The [Quack provider](quack-provider.md) documents matching, preparation cost,
+reference, selection and remaining restrictions. A region lacking a reference
+executes Triton directly with `comparison: not_performed`.
 
-- Independent loop-free full-tensor operations retain the existing
-  CuTe/Triton/Quack candidate enumeration. Python execution compares supported
-  Triton/Quack calls against a PyTorch reference and benchmarks them.
-- Scheduled regions, multiple outputs, input mutations and extended expressions
-  use the complete Triton fallback in `emit_python`. `prepare` binds these inputs;
-  calling the executable compiles/tunes/launches through Triton. Its reports say
-  `comparison: not_performed`: it does not claim cross-provider comparison or an
-  independent accuracy check.
-- `emit(plan)` remains the native CUDA entry, not an automatic Python fallback.
-  Native split-loop composition, communication and explicit Shared transport are
-  not enabled by this integration. Triton rejects communication and Shared
-  transport; explicit Register values cannot silently escape into global memory.
-- Triton retains its existing operator/grid restrictions. This integration does
-  not claim that every semantically valid optimizer output is supported.
+Multiple outputs, input mutation, cross-kernel split tuning or no eligible
+Quack region retain the whole-program `triton_program` path. Its `prepare` binds
+inputs, and invoking the executable compiles/tunes/launches through Triton; it
+does not claim cross-provider comparison or independent correctness validation.
+The manifest retains region pattern/candidate rejection information.
+
+`emit(plan)` remains the Native CUDA entry. Native split-loop composition,
+communication and explicit Shared transport are not enabled by this integration.
+Triton rejects communication and Shared transport; explicit Register values
+cannot silently escape into global memory. Existing Triton grid/operator
+restrictions remain; not every valid optimizer output is supported.
 
 `tests/triton_provider.rs` covers direct Builder input, views, symbolic binding,
 MLA access/loop preservation, cache mutation, multiple outputs, initialization
@@ -196,6 +204,13 @@ TRITON_CACHE_DIR=/tmp/trinity-provider-cache python tests/triton_provider_python
   arithmetic bounds can reference valid enclosing loop coordinates.
 - View capacity, access coverage and writer ownership must be provable by the
   current common analysis. This is not a full SSA/alias/liveness solver.
+- Common `LocalRead.split_last` proves a full last-axis tile can be read through
+  a two-factor view. Triton currently requires power-of-two factors, emits the
+  corresponding reshape/gather and preserves FP32 local values. Non-power-of-two
+  views can remain meaningful for other providers despite this Triton restriction.
+- Equal-width, unpadded concat uses ordered `tl.cat`; unequal/padded concat keeps
+  the generic gather path. This avoids the Triton 3.8 gather-layout assertion
+  observed in nested partial-RoPE concat without changing the IR or compiler passes.
 - Parameterized tile widths are single symbols or constants. Binding and tuning
   cannot make an unsupported access/shape valid by changing its meaning.
 - Triton tensor element/rank/operator constraints remain. Dot uses padded
@@ -232,13 +247,30 @@ operation; it does not yet express a multi-operation GEMM+epilogue region.
 it retains the operation expression and tensor IDs/types/shapes, but currently
 accepts only single-GPU, loop-free, positive full-tensor External/Global accesses
 and non-in-place outputs. Common preparation checks bound configuration symbols;
-it does not build CUDA buffers or impose native output/mutation limits. Native
+it records shared operation scopes without classifying computations. Quack
+discovery supplies its own optional `emit::QuackPatternAnalysis` diagnostics. It does
+not build CUDA buffers or impose native output/mutation limits. Native
 ABI restrictions and buffer slots are prepared only in the CUDA emission path.
 General region/loop coverage and CTA-local register
 ports require further integration, not a parallel copy of Triton's analyzer.
 
-The current [Quack adapter](../../src/emit/provider/quack/mod.rs) recognizes one
-store of GEMM with optional residual/column bias and ReLU. Its checks restrict it
+The Quack-owned [pattern analysis](quack-provider.md#quack-연산-패턴-인식) classifies complete
+scheduled kernel regions as `SingleGemm`, `GemmEpilogue`, or `Other`, with a
+reason for Other. Leading nested ploops share one region result. Ordered stores,
+K-loop accumulation and post-loop pointwise epilogues are analyzed together;
+no part of a larger region is advertised as its complete implementation.
+`OperationCandidates.region_pattern` is a Quack diagnostic; `scope` is the shared original region location;
+independent-operation manifests use `region_pattern` and `scope`. Scheduled
+fallback manifests use `region_patterns`, including all covered operation IDs,
+GEMM/accumulation operations, reduction loop, initialization and epilogue stores.
+Region classification is not region-wide candidate comparison: candidate
+execution coverage still follows the existing operation contract.
+
+The current [Quack adapter](../../src/emit/provider/quack/mod.rs) consumes that
+classification only when the entire region is one non-recurrent store, and
+lowers the supported subset: identity, optional residual/column
+bias and ReLU. Other classified pointwise epilogues retain their classification
+but receive a provider rejection. Its checks restrict it
 to Hopper/SM120, BF16 matrix inputs, BF16/FP32 storage, K/N multiples of 8,
 full-matrix accesses without changed views, and no output/input alias.
 It emits lazy `gemm`/`gemm_add`/`gemm_act` host calls. This describes source support
@@ -254,15 +286,3 @@ See [Emission](emission.md) for that path.
 **Open integration decisions:** region/multiple-operation candidate coverage; Native-versus-Triton rounding and
 reference tolerances; library stride/layout/workspace adaptation; combined
 Native/Opaque execution and benchmark selection. These are not completed APIs.
-
-
-## Register views and concatenation
-
-Common `LocalRead.split_last` proves ownership of a full last axis before a
-two-factor view is read. Triton emits reshape/gather and preserves local FP32
-values; non-power-of-two factors are rejected to preserve padding positions.
-
-Equal-width unpadded concat uses ordered `tl.cat`. Unequal or padded concat
-retains the generic gather path. This avoids manufacturing repeated gather users
-in the partial-RoPE case that triggered Triton 3.8's thread-locality assertion.
-IR concatenation order and the original view semantics remain unchanged.

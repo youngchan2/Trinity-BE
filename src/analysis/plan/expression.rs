@@ -252,7 +252,7 @@ impl Expression {
         }
     }
 
-    pub(super) fn children_mut(&mut self) -> &mut [Self] {
+    pub(crate) fn children_mut(&mut self) -> &mut [Self] {
         match self {
             Self::Apply { args, .. } => args,
             Self::Add(values)

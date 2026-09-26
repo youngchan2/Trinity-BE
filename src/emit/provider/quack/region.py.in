@@ -1,0 +1,102 @@
+def _view(values, descriptor):
+    base = values[descriptor['value']]
+    return base.as_strided(descriptor['shape'], descriptor['strides'],
+                          base.storage_offset() + descriptor['offset'])
+
+
+def _matrix(value):
+    # Copies are explicit candidate preparation and remain inside timed run().
+    aligned = value.data_ptr() % 16 == 0
+    if aligned and ((value.stride(-1) == 1 and value.stride(-2) % 8 == 0)
+                    or (value.stride(-2) == 1 and value.stride(-1) % 8 == 0)):
+        return value
+    result = value.contiguous()
+    return result if result.data_ptr() % 16 == 0 else result.clone()
+
+
+def run(values, *, tuned=True):
+    import torch
+    output_id = _SPEC['output']['value']
+    out = _view(values, _SPEC['output'])
+    for spec in _SPEC['arguments']:
+        t = values[spec['id']]
+        dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}[spec['dtype']]
+        if not t.is_cuda or t.device != out.device or t.dtype != dtype or list(t.shape) != spec['shape'] or not t.is_contiguous():
+            raise ValueError(f'Quack region value {spec["id"]}: device/dtype/shape/storage mismatch')
+        if spec['id'] != output_id and t.untyped_storage().data_ptr() == out.untyped_storage().data_ptr():
+            raise ValueError('Quack region output aliases an input')
+    if tuple(torch.cuda.get_device_capability(out.device)) != tuple(_SPEC['capability']):
+        raise ValueError('Quack region device capability differs from plan')
+    if not out.is_contiguous() or out.data_ptr() % 16:
+        raise ValueError('Quack region requires an aligned contiguous output')
+    op = _SPEC['operation']
+    with torch.cuda.device(out.device):
+        kind = op['kind']
+        if kind == 'rotary':
+            from quack.rotary import apply_rotary
+            order = op['order']
+            x = _view(values, op['input']).permute(order).contiguous()
+            # Original table axes are explicit in the view. Only singleton
+            # batch/head axes are removed; token broadcasting is per call.
+            def table(descriptor):
+                t = _view(values, descriptor).permute(order)
+                return t[0, :, 0, :].expand(x.shape[1], -1).contiguous()
+            result = apply_rotary(x, table(op['cos']), table(op['sin']),
+                                 interleaved=op['interleaved'],
+                                 conjugate=op['conjugate'], inplace=False)
+            inverse = [order.index(i) for i in range(len(order))]
+            out.copy_(result.permute(inverse))
+        elif kind == 'gemm_rotary':
+            from quack.epilogue.library import rope_epi
+            a = _matrix(_view(values, op['lhs']))
+            b = _matrix(_view(values, op['rhs']))
+            c = _view(values, op['cos']).float().expand(op['pair_shape'])
+            s = _view(values, op['sin']).float().expand(op['pair_shape'])
+            # The acc_pair API consumes adjacent cos/sin in the N axis.
+            # FP32 promotion exactly preserves stored table values.
+            table = torch.stack((c, s), dim=-1).flatten(-2).contiguous()
+            rope_epi(a, b, out={'D': out}, table=table, tuned=tuned)
+        elif kind == 'gated_gemm':
+            from quack.gemm_interface import gemm_act
+            a = _matrix(_view(values, op['lhs']))
+            if op['packed'] is not None:
+                weight = _view(values, op['packed'])
+            else:
+                gate, up = _view(values, op['gate']), _view(values, op['up'])
+                # No stale cache when training updates the source weights.
+                weight = torch.stack((gate, up), dim=-1).flatten(-2)
+            gemm_act(a, _matrix(weight), activation=op['activation'], postact_out=out,
+                     out_dtype=out.dtype, postact_dtype=out.dtype, store_preact=False, tuned=tuned)
+        elif kind == 'gemm':
+            from quack.gemm_interface import gemm, gemm_add, gemm_act
+            a, b = _matrix(_view(values, op['lhs'])), _matrix(_view(values, op['rhs']))
+            residual = _matrix(_view(values, op['residual'])) if op['residual'] else None
+            bias = _view(values, op['bias']).contiguous() if op['bias'] else None
+            if op['activation']:
+                gemm_act(a, b, C=residual, bias=bias, activation=op['activation'], postact_out=out,
+                         out_dtype=out.dtype, postact_dtype=out.dtype, store_preact=False, tuned=tuned)
+            elif residual is not None:
+                gemm_add(a, b, residual, out=out, bias=bias, tuned=tuned, split_k=1)
+            else:
+                gemm(a, b, out=out, bias=bias, tuned=tuned, split_k=1)
+        elif kind in ('rms_norm', 'layer_norm'):
+            from quack.rmsnorm import rmsnorm_fwd, layernorm_fwd
+            x = _view(values, op['input']).contiguous()
+            w = _view(values, op['weight']).contiguous() if op['weight'] else None
+            b = _view(values, op['bias']).contiguous() if op['bias'] else None
+            if kind == 'layer_norm':
+                # This public Quack API requires FP32 affine parameters. The IR
+                # norm's opmath is FP32; promotion preserves the stored values.
+                w = w.float() if w is not None else torch.ones(x.shape[-1], device=x.device, dtype=torch.float32)
+                b = b.float() if b is not None else None
+                result = layernorm_fwd(x, w, b, eps=op['epsilon'])
+            else:
+                result, _, _ = rmsnorm_fwd(x, w, b, out_dtype=out.dtype, eps=op['epsilon'], store_rstd=False)
+            # Public norm APIs allocate output. Copy cost is included in timing.
+            out.copy_(result)
+        elif kind == 'softmax':
+            from quack.softmax import softmax_fwd
+            out.copy_(softmax_fwd(_view(values, op['input']).contiguous()))
+        else:
+            raise ValueError(f'unknown Quack region operation: {kind}')
+    return values[output_id]

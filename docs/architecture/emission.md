@@ -3,6 +3,13 @@
 [`PhysicalPlan`](planning.md)에 표현된 연산과 Loop 구조에 맞는 구현을 선택하고,
 선택된 구현을 결합하여 실행 계획과 코드를 생성한다.
 
+공통 `analysis/regions.rs`는 원본 region과 모든 관측 입출력·def-use를 제공한다.
+Provider는 이를 받아 자신의 패턴/API 지원 여부를 검사한다. GEMM·정규화·RoPE 인식은
+`emit/provider/quack/recognition`이 소유한다. Quack 분류/summary의 성공을
+Triton/CuTe 후보의 필수 관문으로 두지 않는다. 후보 pipeline은 전체 region coverage,
+reference 정확성, packing/copy를 포함한 실행 비용과 선택을 담당한다.
+구체 경계는 [Planning](planning.md#연산-패턴-분류)을 따른다.
+
 현재 [`emit()`](../../src/emit/mod.rs)은 prepare → provider 선택 → combine → CUDA 실행 배치
 → region 검증 → render를 거쳐 Native Streamed `CudaSource`를 반환한다. Hopper·sm_89·sm_120의
 pointwise/reduction/GEMM과 Register 결합을 지원한다. Persistent와 Native/Opaque 통합 실행은 후속 설계다.
@@ -18,6 +25,7 @@ CuTe·Triton·Quack 구현은 모두 `emit/provider/`에 있고, Triton lowering
 
 - [Kernel Providers](emission/kernel-providers/README.md): Native/Opaque 구현과 선택 정책 안내.
 - [Hardware Architecture](emission/hardware/README.md): 하드웨어별 실행 배치 안내.
+- [Quack provider](quack-provider.md): 영역별 API 지원 검사·packing·호출 및 비교 경로.
 - [Triton provider](triton-provider.md): 공통 plan에서 Triton source/launch까지의 별도 경로.
 
 ## 대상 하드웨어
@@ -32,8 +40,9 @@ Triton의 target/config와 검증 범위는 [provider 문서](triton-provider.md
 - `emit`: 현재 CuTe만 등록한 Native CUDA 경로. BF16/FP32, single-GPU streamed이며 split loop는 거절한다.
 - `emit_triton`: 공통 plan 전체를 Triton program provider로 전달한다.
 - `kernel_candidates`: CuTe/Triton/Quack 후보를 operation별로 열거한다. 실행·승자 선택은 하지 않는다.
-- `emit_python`: 지원되는 독립 operation의 Triton/Quack 실행·정확성·시간 비교를 구성하거나,
-  scheduled region을 보존하는 Triton 직접 실행 프로그램을 만든다. Native 후보는 아직 비교 실행하지 않는다.
+- `region_candidates`: 원본 region/facts를 각 matcher에 전달하고 전체 region의 Triton/Quack 후보를 열거한다. 의미 summary는 선택적이다.
+- `emit_python`: 지원되는 독립 operation 또는 전체 scheduled region의 정확성·시간 비교 프로그램을 만든다.
+  영역 비교 조건이 맞지 않으면 기존 Triton 직접 실행으로 연결한다. Native 후보는 아직 비교 실행하지 않는다.
 
 아래 Native 명세·조합·Streamed 설명과 Persistent/통합 Opaque의 후속 설계를 구분한다.
 현재 공개 함수는 [emit/mod.rs](../../src/emit/mod.rs), 후보는

@@ -8,6 +8,7 @@ use super::provider::triton::{TritonKernelProvider, TritonSpecification};
 use super::provider::{CuTeKernelProvider, KernelContext, KernelProvider, ProviderError};
 use crate::analysis::regions::OperationScope;
 use crate::emit::native::SpecifiedKernel;
+use crate::emit::provider::quack::recognition::{QuackPatternAnalysis, QuackPatternKind};
 use crate::{Loop, OperationId, PhysicalPlan, Statement};
 use std::collections::BTreeMap;
 
@@ -87,6 +88,9 @@ pub struct CandidateRejection {
 
 #[derive(Debug, Clone, Default)]
 pub struct OperationCandidates {
+    /// Quack's diagnostic classification of the enclosing region, not this operation.
+    /// It does not enlarge any candidate's implementation coverage.
+    pub region_pattern: Option<QuackPatternKind>,
     /// Exact operation occurrence. Membership in a region does not grant a
     /// candidate permission to replace the whole region or split its schedule.
     pub scope: Option<OperationScope>,
@@ -126,6 +130,14 @@ fn discover(
         &mut Vec::new(),
         &mut result,
     )?;
+    // Quack owns these optional diagnostics. Native-only discovery and common
+    // preparation do not run computation pattern recognition.
+    if providers.iter().any(|provider| provider.name() == "quack") {
+        let patterns = QuackPatternAnalysis::analyze(plan);
+        for (operation, entry) in &mut result {
+            entry.region_pattern = patterns.region_for_operation(*operation).map(|r| r.kind);
+        }
+    }
     Ok(result)
 }
 

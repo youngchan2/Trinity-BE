@@ -116,64 +116,7 @@ impl TritonPlan {
             ));
         }
         for (ki, kernel) in self.kernels.iter().enumerate() {
-            let mut arguments = Vec::new();
-            for tensor in self
-                .tensor_order(kernel)
-                .into_iter()
-                .filter(|t| kernel.tensors[t].has_global())
-            {
-                let name = self.tensor_name(tensor);
-                let representative = self.kernel_access(kernel, tensor);
-                let view = self
-                    .analysis
-                    .access(representative)
-                    .view_shape
-                    .as_ref()
-                    .unwrap_or(&self.common.metadata.shapes[&tensor]);
-                let shape: Vec<_> = view.iter().map(|e| self.allocation_expr(e)).collect();
-                let base: Vec<_> = self.common.metadata.shapes[&tensor]
-                    .iter()
-                    .map(|e| self.allocation_expr(e))
-                    .collect();
-                let arg = if shape != base {
-                    let arg = format!("{name}_view_{ki}");
-                    w.line(format!("{arg} = {name}.view{}", tuple(&shape)));
-                    arg
-                } else {
-                    name.to_owned()
-                };
-                arguments.push(arg.clone());
-                arguments.extend((0..view.len()).map(|axis| format!("{arg}.stride({axis})")));
-            }
-            let grid: Vec<_> = kernel
-                .grid_extents
-                .iter()
-                .map(|expr| self.grid_expr(expr, kernel))
-                .collect();
-            let grid = if grid.is_empty() {
-                "(1,)".into()
-            } else {
-                tuple(grid)
-            };
-            w.line(format!("kernel_{ki}[lambda meta: {grid}]("));
-            w.indent += 1;
-            for arg in arguments {
-                w.line(format!("{arg},"));
-            }
-            let owned = self.owned_parameters(kernel);
-            for symbol in self.parameters(kernel).difference(&owned) {
-                let p = self.parameter(symbol);
-                w.line(format!("{p}={p},"));
-            }
-            w.indent -= 1;
-            w.line(")");
-            for symbol in owned
-                .iter()
-                .filter(|s| self.metadata.split_owners.contains_key(*s))
-            {
-                let p = self.parameter(symbol);
-                w.line(format!("{p} = kernel_{ki}.best_config.kwargs['{p}']"));
-            }
+            self.kernel_launch(ki, kernel, w);
         }
         w.line(format!(
             "return {}",
@@ -184,5 +127,70 @@ impl TritonPlan {
             }
         ));
         w.indent = 0;
+    }
+    pub(super) fn kernel_launch(
+        &self,
+        ki: usize,
+        kernel: &super::super::KernelPlan,
+        w: &mut CodegenContext,
+    ) {
+        let mut arguments = Vec::new();
+        for tensor in self
+            .tensor_order(kernel)
+            .into_iter()
+            .filter(|t| kernel.tensors[t].has_global())
+        {
+            let name = self.tensor_name(tensor);
+            let representative = self.kernel_access(kernel, tensor);
+            let view = self
+                .analysis
+                .access(representative)
+                .view_shape
+                .as_ref()
+                .unwrap_or(&self.common.metadata.shapes[&tensor]);
+            let shape: Vec<_> = view.iter().map(|e| self.allocation_expr(e)).collect();
+            let base: Vec<_> = self.common.metadata.shapes[&tensor]
+                .iter()
+                .map(|e| self.allocation_expr(e))
+                .collect();
+            let arg = if shape != base {
+                let arg = format!("{name}_view_{ki}");
+                w.line(format!("{arg} = {name}.view{}", tuple(&shape)));
+                arg
+            } else {
+                name.to_owned()
+            };
+            arguments.push(arg.clone());
+            arguments.extend((0..view.len()).map(|axis| format!("{arg}.stride({axis})")));
+        }
+        let grid: Vec<_> = kernel
+            .grid_extents
+            .iter()
+            .map(|expr| self.grid_expr(expr, kernel))
+            .collect();
+        let grid = if grid.is_empty() {
+            "(1,)".into()
+        } else {
+            tuple(grid)
+        };
+        w.line(format!("kernel_{ki}[lambda meta: {grid}]("));
+        w.indent += 1;
+        for arg in arguments {
+            w.line(format!("{arg},"));
+        }
+        let owned = self.owned_parameters(kernel);
+        for symbol in self.parameters(kernel).difference(&owned) {
+            let p = self.parameter(symbol);
+            w.line(format!("{p}={p},"));
+        }
+        w.indent -= 1;
+        w.line(")");
+        for symbol in owned
+            .iter()
+            .filter(|s| self.metadata.split_owners.contains_key(*s))
+        {
+            let p = self.parameter(symbol);
+            w.line(format!("{p} = kernel_{ki}.best_config.kwargs['{p}']"));
+        }
     }
 }

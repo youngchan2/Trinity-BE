@@ -108,6 +108,19 @@ def _prepare(manifest, sources, inputs, *, providers=None, rtol=1e-2, atol=1e-2,
         values, device = _bind(manifest, inputs)
         with torch.cuda.device(device):
             for operation in manifest['operations']:
+                if operation.get('expression') is None and manifest.get('mode') == 'region_candidates':
+                    candidates = [c for c in operation['candidates']
+                                  if c['provider'] == 'triton' and (providers is None or 'triton' in providers)]
+                    if not candidates:
+                        raise RuntimeError(f'region {operation["id"]} requires Triton fallback')
+                    candidate = candidates[0]
+                    run = _load_candidate(candidate, sources)
+                    run(values)
+                    steps.append((operation, run))
+                    reports.append({'region': operation['id'], 'selected': candidate['key'],
+                                    'comparison': 'not_performed',
+                                    'candidates': operation['rejections']})
+                    continue
                 output = operation['output']
                 expected = torch.empty_like(values[output])
                 expected.view(operation['output_view_shape']).copy_(torch.as_tensor(_reference(operation['expression'], values), device=device, dtype=torch.float32))

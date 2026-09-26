@@ -1,5 +1,9 @@
-//! Compose operation candidates or emit indivisible scheduled Triton regions.
+//! Compose operation/whole-region candidates or preserve a Triton-only program.
 use super::{EmitError, kernel_candidates, request::KernelRequest};
+use crate::analysis::regions::OperationScope;
+use crate::emit::provider::quack::recognition::{
+    GemmInitialization, QuackPatternAnalysis, RegionAnalysis,
+};
 use crate::{
     Constant, CudaTargetCapability, Expression as E, PhysicalPlan, Statement, TargetCapability,
 };
@@ -13,14 +17,21 @@ pub struct PythonProgram {
     fallback: Option<String>,
 }
 impl PythonProgram {
+    pub(super) fn candidates(manifest: Value, sources: BTreeMap<String, String>) -> Self {
+        Self {
+            manifest,
+            sources,
+            fallback: None,
+        }
+    }
     pub fn manifest(&self) -> &Value {
         &self.manifest
     }
     pub fn sources(&self) -> &BTreeMap<String, String> {
         &self.sources
     }
-    /// Self-contained Python module. Independent operations use correctness and
-    /// timing selection; scheduled regions execute the Triton fallback directly.
+    /// Self-contained Python module. Eligible operation/region candidates use
+    /// correctness and timing selection; other programs use direct fallback.
     pub fn emit(&self) -> String {
         if let Some(source) = &self.fallback {
             return format!(
@@ -58,13 +69,24 @@ pub fn emit_python(plan: &PhysicalPlan) -> Result<PythonProgram, EmitError> {
             .operations()
             .any(|(_, op)| !supports_reference(op.expression()))
     {
+        let patterns = QuackPatternAnalysis::analyze(plan);
+        let classifications: Vec<_> = patterns.regions().map(region_json).collect();
+        let regions = super::region_candidates(plan)?;
+        let availability: Vec<_> = regions.iter().map(|r| json!({
+            "scope":r.scope.statement_path,"pattern":r.pattern,
+            "providers":r.candidates.iter().map(|c|c.provider()).collect::<Vec<_>>(),
+            "rejections":r.rejections.iter().map(|r|json!({"provider":r.provider,"reason":r.reason})).collect::<Vec<_>>()
+        })).collect();
+        if let Some(selected) = super::region::program(plan, regions, json!(classifications)) {
+            return Ok(selected);
+        }
         let program = super::TritonKernelProvider
             .lower_program(plan, Default::default())
             .map_err(|e| EmitError::Combination {
                 reason: e.to_string(),
             })?;
         let names = &program.plan().metadata().tensor_names;
-        let manifest = json!({"version":1,"mode":"triton_program", "inputs":plan.inputs().iter().map(|b|json!({"name":b.tensor(),"value":b.value().index(),"argument":names[b.value().index()]})).collect::<Vec<_>>(), "outputs":plan.outputs().iter().map(|b|json!({"name":b.tensor(),"value":b.value().index()})).collect::<Vec<_>>(), "kernels":program.plan().kernels().len()});
+        let manifest = json!({"version":1,"mode":"triton_program", "inputs":plan.inputs().iter().map(|b|json!({"name":b.tensor(),"value":b.value().index(),"argument":names[b.value().index()]})).collect::<Vec<_>>(), "outputs":plan.outputs().iter().map(|b|json!({"name":b.tensor(),"value":b.value().index()})).collect::<Vec<_>>(), "kernels":program.plan().kernels().len(), "region_patterns": classifications,"region_candidates":availability});
         let source = program.emit();
         return Ok(PythonProgram {
             manifest,
@@ -106,7 +128,7 @@ pub fn emit_python(plan: &PhysicalPlan) -> Result<PythonProgram, EmitError> {
         let E::Store { destination, value } = &request.expression else {
             unreachable!()
         };
-        operations.push(json!({"id":id.index(),"inputs":request.inputs.iter().map(|i|i.index()).collect::<Vec<_>>(),"output":request.output.index(),"output_view_shape":destination.shape(&request.tensors[&destination.value].shape),"expression":reference(value),"candidates":candidates,"rejections":rejected}));
+        operations.push(json!({"id":id.index(),"region_pattern":all[id].region_pattern,"scope":all[id].scope.as_ref().map(scope_json),"inputs":request.inputs.iter().map(|i|i.index()).collect::<Vec<_>>(),"output":request.output.index(),"output_view_shape":destination.shape(&request.tensors[&destination.value].shape),"expression":reference(value),"candidates":candidates,"rejections":rejected}));
     }
     let TargetCapability::Cuda(target) = plan.target();
     let capability = match target {
@@ -125,6 +147,32 @@ pub fn emit_python(plan: &PhysicalPlan) -> Result<PythonProgram, EmitError> {
         manifest,
         sources,
         fallback: None,
+    })
+}
+
+fn scope_json(scope: &OperationScope) -> Value {
+    json!({"operation":scope.operation.index(), "statement_path":scope.statement_path, "region_path":scope.region_path})
+}
+
+fn region_json(region: &RegionAnalysis<'_>) -> Value {
+    json!({
+        "statement_path": region.scope.statement_path,
+        "operations": region.scope.operations.iter().map(|id| id.index()).collect::<Vec<_>>(),
+        "kind": region.kind,
+        "reason": region.reason,
+        "computation_reason": region.computation_reason,
+        "gemm": region.gemm.as_ref().map(|g| json!({
+            "matmul_operation": g.matmul_operation.index(),
+            "accumulation_operation": g.accumulation_operation.map(|id| id.index()),
+            "reduction_loop": g.reduction_loop.map(|l| &l.domain),
+            "accumulator": g.accumulator.value.index(),
+            "initialization": g.initialization.map(|init| match init {
+                GemmInitialization::ZeroRecurrence => json!({"kind":"zero_recurrence"}),
+                GemmInitialization::ExplicitZero(id) => json!({"kind":"explicit_zero", "operation":id.index()}),
+            }),
+            "epilogue_operations": g.epilogue_operations.iter().map(|id| id.index()).collect::<Vec<_>>(),
+            "output": g.output().value.index(),
+        })),
     })
 }
 

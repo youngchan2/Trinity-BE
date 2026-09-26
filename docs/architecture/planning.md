@@ -1,6 +1,6 @@
 # Planning: 공통 IR 정보와 PhysicalPlan
 
-2026-09-22 기준 공통 plan과 storage 분석의 구현을 설명한다.
+2026-09-26 작업 트리 기준 공통 plan과 storage 분석의 구현을 설명한다.
 계약 검증은 `tests/common_storage.rs`, `tests/plan_access.rs`, `tests/logical_dtype.rs`에서 확인할 수 있다.
 이 문서는 공통 정보의 원본이며, Triton 구현 경로는 [provider](triton-provider.md),
 수치 구현은 [precision](triton-precision.md), 후보·조합은 [emission](emission.md)이 원본이다.
@@ -13,6 +13,8 @@
 - `analysis/facts/`: 기존 접근·loop·scalar·metadata·dependency·flow·dtype 분석과 `ProgramFacts`.
 - `analysis/storage/`: 공통 facts에 근거한 storage/초기화/publication 계약.
 - `analysis/plan/`: 기존 PhysicalPlan 표현·builder·reader·normalization.
+- `analysis/regions.rs`: 분류와 무관한 원본 kernel region, def-use와 전체 memory boundary.
+- `analysis/views.rs`: provider와 무관한 TensorView와 shape/stride/offset 해석.
 
 `facts/`는 기존 분석 파일을 함께 묶은 것이다. 새로운 분석 단계나 정책을 추가하지 않았다.
 기존 공개 `analysis::*` API는 `analysis/mod.rs`의 re-export를 통해 유지한다.
@@ -170,45 +172,48 @@ zero-start로 해석하는 기존 규약도 남아 있다. Scheduled seed 보존
 Triton이 loop 밖 SSA 사용을 위해 추가하는 incoming-value 초기화나 lane 간 barrier 위치는
 별도의 backend lowering 결정이며 common의 의미상 초기화와 구분한다.
 
-## Provider가 추가해야 하는 정보
+## 연산 패턴 분류
 
-| 공통에서 받는 것 | Provider가 결정·검증할 것 |
-| --- | --- |
-| 원래 expression·region·loop·접근 view/indices | 맡을 operation/region 범위, 지원 여부, 실행 순서 보존 |
-| 확정된 logical/storage dtype와 backing storage | register 계산 타입, cast 위치, 실제 operand/accumulator type; [수치 경계](triton-precision.md#provider-integration-boundary) |
-| Local producer/read 및 publication | thread-to-element mapping, layout 호환, barrier/pipeline |
-| Symbolic tile와 target | 허용 tile·instruction·resource 조건, binding/config/launch |
-| ABI 입출력과 mutation | library 호출 인자, stride/alignment, workspace, output alias 제한 |
+### Provider가 받는 원본과 공통 facts
 
-Quack은 [KernelRequest](../../src/emit/request.rs)의 제한된 whole-tensor 경로를 사용하며,
-CuTe는 내부 `KernelContext`와 Native 명세/조합을 사용한다. 이들은 전체 scheduled fallback과
-동일한 지원 범위가 아니다. [provider의 현재 경로와 제한](triton-provider.md#selection-boundary-and-current-limits)을 확인한다.
+[RegionFacts::collect](../../src/analysis/regions.rs)는 `PhysicalPlan`과 원본
+`Statement`를 빌리고, `RegionScope`의 **모든 operation**을 보존한다.
+`inputs`, ordered `writes`, `observable_writes`, `input_updates`,
+`producers/consumers`, `global_values()`는 기존 operation inflows/outflows,
+zero-init, value storage와 program 입출력으로 구성한다. Global write와 다른
+region의 consumer도 관측 대상으로 포함한다. 여러 출력/동일 값의 여러 store를
+마지막 출력 하나로 축약하지 않는다. Loop·계산식·access·dtype·초기화는 원래 plan에서 읽는다.
 
-## 아직 확정되지 않은 확장
+Provider의 입력 계약은 이 원본과 facts다. Quack의 분류나 summary가 실패해도
+Triton/CuTe는 원본 plan을 검사한다. Quack의 진단 enum은 공통 plan의 계약이 아니다.
+새 provider는 공통 enum을 확장하지 않고 자신의 패턴과 지원 조건을 검사할 수 있다.
 
-- 여러 operation/loop/region을 하나의 GEMM+epilogue candidate로 묶는 coverage 계약.
-- Native와 Triton의 register 경계 rounding 차이에 대한 공통 수치 비교 기준.
-- Shared 전달, 일반 alias/value-version 분석, Native/opaque의 통합 compile·benchmark·선택.
+`require_single_output`은 전체 관측 정보에 대한 보수적인 검증 helper다.
+이를 호출하는 현재 Quack adapter가 단일 출력/비변이 제한을 가지며,
+공통 PhysicalPlan/RegionFacts가 단일 출력만 표현하는 것은 아니다.
 
-위 항목은 기존 공통 API의 제공 기능으로 간주하지 않는다. 새 provider 작업에서 필요한
-범위를 producer와 consumer 양쪽 테스트와 함께 확정한다.
+### 공통 접근 사실과 provider 인식의 경계
 
+`RegionScope`, `OperationScope`, `operation_scopes(plan)`은
+[regions.rs](../../src/analysis/regions.rs)에 있으며 연산 분류 없이 원본 위치를 제공한다.
+[views.rs](../../src/analysis/views.rs)의
+`TensorView { value, shape, strides, offset }`은 summary의 접근을 기존 contiguous
+allocation에 연결한다. tensor_view는 full load, 상수 slice/element 및 axis-only
+변환을 해석한다. 새 allocation·packing·하드웨어 layout·dtype cast는 결정하지 않는다.
+모든 ID/경로와 borrowed expression은 분석 대상 plan에만 유효하다.
 
-## 공통 region과 접근 view 정보
+GEMM·SwiGLU·정규화·RoPE 식 인식과 영역 분류는
+[Quack recognition](quack-provider.md#quack-연산-패턴-인식)이 소유한다.
+공통 분석에는 라이브러리용 연산 분류 enum이나 필수 summary 단계가 없다.
 
-[RegionFacts](../../src/analysis/regions.rs)는 원본 region의 statement/operation 위치,
-입력, 모든 store, 관측 가능한 store, 입력 갱신 및 producer/consumer 관계를 제공한다.
-`global_values()`는 External/Global storage의 전체 launch 경계를 반환한다.
-`require_single_output()`은 adapter가 호출하는 제한 검사이며 공통 plan의 복수 출력을 없애지 않는다.
+공통 local read binding은 prefix 좌표가 같고 writer가 마지막 N 축 **전체를**
+소유할 때 `[... ,N] → [... ,P,C]` (`N=P*C`)의 부분 접근을 연결한다.
+`LocalRead.split_last`에는 논리 factor만 있다. Triton의 power-of-two padding 제약은
+provider lowering에서 검사하며, 이 제약으로 공통 view의 의미를 바꾸지 않는다.
 
-[TensorView](../../src/analysis/views.rs)는 기존 contiguous allocation에 대한
-value identity, shape, strides, offset을 보관한다. Full load, 상수 slice/element,
-permute/transpose 및 singleton 축 변환을 해석하며 packing이나 dtype 변환을 결정하지 않는다.
-
-`operation_scopes()`와 `emit/prepare.rs`는 연산 분류 없이 원본 operation의 위치를 제공한다.
-Provider는 이 사실과 원본 계산식을 사용해 자체적으로 지원 여부를 판정할 수 있다.
-
-
-공통 local read binding은 prefix 좌표가 같고 writer가 마지막 N 축 전체를 소유할 때
-`[...,N] → [...,P,C]` (`N=P*C`)의 접근을 연결한다. `LocalRead.split_last`에는 논리
-factor만 보관하며 provider의 padding 제약을 공통 view 의미에 넣지 않는다.
+`emit/prepare.rs`는 symbol binding과 원본 operation scope만 준비한다.
+Quack 후보를 요청할 때만 operation 진단용 Quack 분류를 실행한다. `emit::region_candidates`
+경로는 RegionFacts를 provider에 전달하며 Quack summary는 선택적이다. 기존 operation
+후보의 coverage를 확대하지 않는다. manifest는 분류와 원본 범위, 후보 및 거절 이유를
+보관한다. [Quack provider](quack-provider.md)가 구현 지원·packing·호출·선택 경계의 원본이다.
+분류 성공은 backend 컴파일·실행·성능 검증을 뜻하지 않는다.

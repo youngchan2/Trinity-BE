@@ -8,16 +8,20 @@ mod execution;
 pub(crate) mod fusion;
 pub(crate) mod implementation;
 mod native;
-mod pattern;
 mod prepare;
 pub(crate) mod provider;
+mod region;
 mod request;
 mod wrapper;
+pub use region::{RegionCandidates, RegionKernelCandidate, region_candidates};
 
 pub use candidate::{
     CandidateKind, CandidateRejection, KernelCandidate, OperationCandidates, kernel_candidates,
 };
-pub use provider::quack::{QuackApi, QuackSpecification};
+pub use provider::quack::{
+    QuackApi, QuackPatternAnalysis, QuackPatternKind, QuackRegionOperation,
+    QuackRegionSpecification, QuackSpecification,
+};
 pub use provider::triton::TritonSpecification;
 pub use provider::triton::{TritonKernelProvider, TritonProgram};
 pub use wrapper::{PythonProgram, emit_python};
